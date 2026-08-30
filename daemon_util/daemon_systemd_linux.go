@@ -9,7 +9,6 @@ package daemon_util
 import (
 	"os"
 	"os/exec"
-	"strings"
 	"text/template"
 )
 
@@ -20,10 +19,6 @@ type systemDRecord struct {
 	dependencies   []string
 	executablePath string
 	template       string
-}
-
-func systemdEscapeSpecifiers(value string) string {
-	return strings.ReplaceAll(value, "%", "%%")
 }
 
 // Standard service path for systemD daemons
@@ -68,13 +63,13 @@ func (linux *systemDRecord) Install(args ...string) (string, error) {
 	if err != nil {
 		return installAction + failed, err
 	}
-	_, err = os.Stat(execPatch)
-	if err != nil {
+	if err := validateExecutable(execPatch); err != nil {
 		return installAction + failed, err
 	}
 
 	funcs := template.FuncMap{
-		"systemdQuote": systemdQuote,
+		"systemdQuote":       systemdQuote,
+		"systemdConfigQuote": systemdConfigQuote,
 	}
 	if err := writeTemplateFile(
 		srvPath,
@@ -85,8 +80,8 @@ func (linux *systemDRecord) Install(args ...string) (string, error) {
 			Name, Description, Dependencies, Path, Args string
 		}{
 			linux.name,
-			systemdEscapeSpecifiers(linux.description),
-			systemdEscapeSpecifiers(strings.Join(linux.dependencies, " ")),
+			linux.description,
+			systemdConfigQuoteArgs(linux.dependencies),
 			execPatch,
 			systemdQuoteArgs(args),
 		},
@@ -217,13 +212,12 @@ func (linux *systemDRecord) SetTemplate(tplStr string) error {
 }
 
 const defaultSystemDConfig = `[Unit]
-Description={{.Description}}
+Description={{systemdConfigQuote .Description}}
 Requires={{.Dependencies}}
 After={{.Dependencies}}
 
 [Service]
-PIDFile=/var/run/{{.Name}}.pid
-ExecStartPre=/bin/rm -f /var/run/{{.Name}}.pid
+Type=exec
 ExecStart={{systemdQuote .Path}} {{.Args}}
 Restart=on-failure
 RestartSec=20s

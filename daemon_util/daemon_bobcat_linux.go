@@ -9,7 +9,7 @@ package daemon_util
 import (
 	"os"
 	"os/exec"
-	"regexp"
+	"strings"
 	"text/template"
 )
 
@@ -40,10 +40,8 @@ func (linux *bobCatRecord) isInstalled() bool {
 func (linux *bobCatRecord) checkRunning() (string, bool) {
 	srvPath := linux.servicePath()
 	output, err := exec.Command(srvPath, "status").Output()
-	if err == nil {
-		if matched, err := regexp.MatchString("running", string(output)); err == nil && matched {
-			return "Service is running...", true
-		}
+	if err == nil && strings.Contains(string(output), "running") {
+		return "Service is running...", true
 	}
 
 	return "Service is stopped", false
@@ -67,8 +65,7 @@ func (linux *bobCatRecord) Install(args ...string) (string, error) {
 	if err != nil {
 		return installAction + failed, err
 	}
-	_, err = os.Stat(execPatch)
-	if err != nil {
+	if err := validateExecutable(execPatch); err != nil {
 		return installAction + failed, err
 	}
 
@@ -148,9 +145,9 @@ func (linux *bobCatRecord) Stop() (string, error) {
 		return stopAction + failed, ErrNotInstalled
 	}
 
-	//if _, ok := linux.checkRunning(); !ok {
-	//	return stopAction + failed, ErrAlreadyStopped
-	//}
+	if _, ok := linux.checkRunning(); !ok {
+		return stopAction + failed, ErrAlreadyStopped
+	}
 
 	srvPath := linux.servicePath()
 	if err := exec.Command(srvPath, "stop").Run(); err != nil {
@@ -171,11 +168,8 @@ func (linux *bobCatRecord) Status() (string, error) {
 		return statNotInstalled, ErrNotInstalled
 	}
 
-	return "unsupported platform", nil
-
-	//statusAction, _ := linux.checkRunning()
-	//
-	//return statusAction, nil
+	statusAction, _ := linux.checkRunning()
+	return statusAction, nil
 }
 
 // Run - Run service
@@ -200,38 +194,91 @@ const defaultBobCatConfig = `#!/bin/sh
 
 NAME={{shellQuote .Name}}
 DAEMON={{shellQuote .Path}}
-PIDFILE=/var/run/$NAME.pid
+PIDFILE=${PIDFILE:-/var/run/$NAME.pid}
 
-[ -r /etc/default/$NAME ] && . /etc/default/$NAME $1
+[ -r "/etc/default/$NAME" ] && . "/etc/default/$NAME" "$1"
+
+read_pid() {
+	[ -r "$PIDFILE" ] || return 1
+	pid=$(cat "$PIDFILE")
+	case "$pid" in
+		''|*[!0-9]*) return 1 ;;
+	esac
+}
+
+is_running() {
+	read_pid && kill -0 "$pid" 2>/dev/null
+}
 
 do_start() {
-        echo -n "Starting $NAME: "
-        start-stop-daemon --start --quiet --background --make-pidfile \
-		--pidfile "$PIDFILE" --exec "$DAEMON" -- {{.Args}} \
-                && echo "OK" || echo "FAIL"
+	echo -n "Starting $NAME: "
+	if start-stop-daemon --start --quiet --background --make-pidfile \
+		--pidfile "$PIDFILE" --exec "$DAEMON" -- {{.Args}}; then
+		sleep 1
+		if is_running; then
+			echo "OK"
+		else
+			rm -f "$PIDFILE"
+			echo "FAIL"
+			return 1
+		fi
+	else
+		echo "FAIL"
+		return 1
+	fi
 }
 
 do_stop() {
-        echo -n "Stopping $NAME: "
-        start-stop-daemon --stop --quiet --pidfile $PIDFILE \
-                && echo "OK" || echo "FAIL"
-	kill -9 ` + "`pidof {{.Name}}`" + `
+	echo -n "Stopping $NAME: "
+	if ! read_pid; then
+		echo "FAIL"
+		return 1
+	fi
+	if start-stop-daemon --stop --quiet --pidfile "$PIDFILE" --exec "$DAEMON"; then
+		retries=12
+		while kill -0 "$pid" 2>/dev/null && [ "$retries" -gt 0 ]; do
+			sleep 1
+			retries=$((retries - 1))
+		done
+		if kill -0 "$pid" 2>/dev/null; then
+			echo "FAIL"
+			return 1
+		fi
+		rm -f "$PIDFILE"
+		echo "OK"
+	else
+		echo "FAIL"
+		return 1
+	fi
+}
+
+do_status() {
+	if is_running; then
+		echo "$NAME is running (pid $pid)"
+		return 0
+	fi
+	rm -f "$PIDFILE"
+	echo "$NAME is stopped"
+	return 3
 }
 
 case "$1" in
-        start)
-                do_start
-                ;;
-        stop)
-                do_stop
-                ;;
-        restart)
-                do_stop
-                sleep 12
-                do_start
-                ;;
+	start)
+		do_start
+		;;
+	stop)
+		do_stop
+		;;
+	restart)
+		do_stop &&
+			sleep 12 &&
+			do_start
+		;;
+	status)
+		do_status
+		;;
 	*)
-                echo "Usage: $0 {start|stop|restart}"
-                exit 1
+		echo "Usage: $0 {start|stop|restart|status}"
+		exit 1
 esac
 `

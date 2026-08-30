@@ -7,6 +7,7 @@
 package daemon_util
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -39,12 +40,15 @@ func (bsd *bsdRecord) isInstalled() bool {
 
 // Is a service is enabled
 func (bsd *bsdRecord) isEnabled() (bool, error) {
-	rcData, err := os.ReadFile("/etc/rc.conf")
-	if err != nil {
-		return false, err
+	err := exec.Command("service", bsd.name, "enabled").Run()
+	if err == nil {
+		return true, nil
 	}
-	pattern := regexp.MustCompile(`(?m)^[\t ]*` + regexp.QuoteMeta(bsd.name) + `_enable[\t ]*=[\t ]*"?YES"?[\t ]*(?:#.*)?$`)
-	return pattern.Match(rcData), nil
+	var exitError *exec.ExitError
+	if errors.As(err, &exitError) {
+		return false, nil
+	}
+	return false, err
 }
 
 func (bsd *bsdRecord) getCmd(cmd string) string {
@@ -115,8 +119,7 @@ func (bsd *bsdRecord) Install(args ...string) (string, error) {
 	if err != nil {
 		return installAction + failed, err
 	}
-	_, err = os.Stat(execPatch)
-	if err != nil {
+	if err := validateExecutable(execPatch); err != nil {
 		return installAction + failed, err
 	}
 
@@ -129,8 +132,8 @@ func (bsd *bsdRecord) Install(args ...string) (string, error) {
 		bsd.template,
 		funcs,
 		&struct {
-			Name, Description, Path, Args string
-		}{bsd.name, bsd.description, execPatch, shellQuoteArgs(args)},
+			Name, RCName, RCVar, Description, Path, Args string
+		}{bsd.name, freeBSDRCName(bsd.name), freeBSDRCVar(bsd.name), bsd.description, execPatch, shellQuoteArgs(args)},
 		0755,
 	); err != nil {
 		return installAction + failed, err
@@ -240,20 +243,20 @@ func (linux *bsdRecord) SetTemplate(tplStr string) error {
 
 const defaultBSDConfig = `#!/bin/sh
 #
-# PROVIDE: {{.Name}}
-# REQUIRE: networking syslog
+# PROVIDE: {{.RCName}}
+# REQUIRE: NETWORKING syslogd
 # KEYWORD:
 
 # Add the following lines to /etc/rc.conf to enable the {{.Name}}:
 #
-# {{.Name}}_enable="YES"
+# {{.RCVar}}="YES"
 #
 
 
 . /etc/rc.subr
 
-name={{shellQuote .Name}}
-rcvar="{{.Name}}_enable"
+name={{shellQuote .RCName}}
+rcvar={{shellQuote .RCVar}}
 command={{shellQuote .Path}}
 pidfile="/var/run/$name.pid"
 

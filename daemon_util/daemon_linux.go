@@ -72,8 +72,15 @@ func ListServiceStatuses() ([]ServiceStatus, error) {
 func newDaemon(name, description string, _ Kind, dependencies []string, executablePath string) (Daemon, error) {
 	// newer subsystem must be checked first
 	if _, err := os.Stat("/run/systemd/system"); err == nil {
+		if err := validateSystemdDependencies(dependencies); err != nil {
+			return nil, err
+		}
 		log.Println("[info] systemd detected")
 		return &systemDRecord{name: name, description: description, dependencies: dependencies, executablePath: executablePath, template: defaultSystemDConfig}, nil
+	}
+	if openRCDetected("/") {
+		log.Println("[info] openrc detected")
+		return &openRCRecord{name: name, description: description, executablePath: executablePath, template: defaultOpenRCConfig}, nil
 	}
 	if _, err := os.Stat("/sbin/initctl"); err == nil {
 		log.Println("[info] upstart detected")
@@ -91,7 +98,7 @@ func newDaemon(name, description string, _ Kind, dependencies []string, executab
 		return &bobCatRecord{name: name, description: description, executablePath: executablePath, template: defaultBobCatConfig}, nil
 	}
 
-	if info, err := os.Stat("/etc/init.d"); err == nil && info.IsDir() {
+	if info, err := os.Stat("/etc/rc.d/init.d/functions"); err == nil && !info.IsDir() {
 		log.Println("[warning] using default systemV type")
 		return &systemVRecord{name: name, description: description, executablePath: executablePath, template: defaultSystemVConfig}, nil
 	}

@@ -68,11 +68,79 @@ func TestShellQuoteArgsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestOpenRCAssignmentQuoteRoundTrip(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell is not available on Windows")
+	}
+
+	args := []string{"--port", "8080", "value with spaces", "", "it's", "$HOME", "$(exit 23)", "line one\nline two"}
+	script := "command_args=" + shellQuote(shellQuoteArgs(args)) + `; eval "set -- $command_args"; for arg do printf '%s\000' "$arg"; done`
+	output, err := exec.Command("sh", "-c", script).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := bytes.Split(bytes.TrimSuffix(output, []byte{0}), []byte{0})
+	gotArgs := make([]string, len(got))
+	for index := range got {
+		gotArgs[index] = string(got[index])
+	}
+	if !slices.Equal(gotArgs, args) {
+		t.Fatalf("OpenRC argument round trip = %q, want %q", gotArgs, args)
+	}
+}
+
+func TestFreeBSDRCVar(t *testing.T) {
+	tests := []struct {
+		name      string
+		wantName  string
+		wantRCVar string
+	}{
+		{name: "worker", wantName: "worker", wantRCVar: "worker_enable"},
+		{name: "worker_2", wantName: "worker_2", wantRCVar: "worker_2_enable"},
+		{name: "my-worker", wantName: "daemon_6d_79_2d_77_6f_72_6b_65_72", wantRCVar: "daemon_6d_79_2d_77_6f_72_6b_65_72_enable"},
+		{name: "2worker", wantName: "daemon_32_77_6f_72_6b_65_72", wantRCVar: "daemon_32_77_6f_72_6b_65_72_enable"},
+	}
+
+	for _, test := range tests {
+		if got := freeBSDRCName(test.name); got != test.wantName {
+			t.Fatalf("freeBSDRCName(%q) = %q, want %q", test.name, got, test.wantName)
+		}
+		if got := freeBSDRCVar(test.name); got != test.wantRCVar {
+			t.Fatalf("freeBSDRCVar(%q) = %q, want %q", test.name, got, test.wantRCVar)
+		}
+	}
+}
+
 func TestSystemdQuoteArgs(t *testing.T) {
 	args := []string{"--port", "value with spaces", "", "$HOME", "100%", `say "hi"`, `C:\apps\myapp`, "line one\nline two"}
 	want := `"--port" "value with spaces" "" "$$HOME" "100%%" "say \"hi\"" "C:\\apps\\myapp" "line one\nline two"`
 	if got := systemdQuoteArgs(args); got != want {
 		t.Fatalf("systemdQuoteArgs() = %q, want %q", got, want)
+	}
+}
+
+func TestSystemdConfigQuoteArgs(t *testing.T) {
+	args := []string{`$HOME`, `100%`, `trailing\`}
+	want := `"$HOME" "100%%" "trailing\\"`
+	if got := systemdConfigQuoteArgs(args); got != want {
+		t.Fatalf("systemdConfigQuoteArgs() = %q, want %q", got, want)
+	}
+}
+
+func TestValidateSystemdDependencies(t *testing.T) {
+	for _, dependencies := range [][]string{
+		{"network-online.target"},
+		{"dbus.service", "worker@blue.service"},
+	} {
+		if err := validateSystemdDependencies(dependencies); err != nil {
+			t.Fatalf("validateSystemdDependencies(%q): %v", dependencies, err)
+		}
+	}
+
+	for _, dependency := range []string{"", "network online.target", "path/to.service", "missing-suffix"} {
+		if err := validateSystemdDependencies([]string{dependency}); !errors.Is(err, ErrInvalidDependency) {
+			t.Fatalf("validateSystemdDependencies(%q) error = %v, want %v", dependency, err, ErrInvalidDependency)
+		}
 	}
 }
 

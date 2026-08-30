@@ -7,25 +7,43 @@
 package daemon_util
 
 import (
-	"os/exec"
-	"strconv"
-	"strings"
+	"fmt"
+	"os"
 )
 
 const statNotInstalled = "Service not installed"
 
 func checkPrivileges() (bool, error) {
-	output, err := exec.Command("id", "-g").Output()
-	if err != nil {
-		return false, ErrUnsupportedSystem
-	}
-
-	gid, err := strconv.ParseUint(strings.TrimSpace(string(output)), 10, 32)
-	if err != nil {
-		return false, ErrUnsupportedSystem
-	}
-	if gid != 0 {
+	if os.Geteuid() != 0 {
 		return false, ErrRootPrivileges
 	}
 	return true, nil
+}
+
+func validateExecutable(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("%w: path must name a regular file", ErrInvalidExecutablePath)
+	}
+	if info.Mode().Perm()&0111 == 0 {
+		return fmt.Errorf("%w: file is not executable", ErrInvalidExecutablePath)
+	}
+	return nil
+}
+
+func createServiceLinks(target string, links []string) error {
+	created := make([]string, 0, len(links))
+	for _, link := range links {
+		if err := os.Symlink(target, link); err != nil {
+			for _, path := range created {
+				_ = os.Remove(path)
+			}
+			return err
+		}
+		created = append(created, link)
+	}
+	return nil
 }

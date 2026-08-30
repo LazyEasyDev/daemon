@@ -14,12 +14,13 @@ build_target() {
 	target_arch=$2
 	output_arch=${3:-$target_arch}
 	extension=${4:-}
+	target_arm=${5:-}
 	output="$build_dir/test-app-$target_os-$output_arch$extension"
 
 	printf 'Compiling test app for %s/%s\n' "$target_os" "$target_arch"
 	(
 		cd "$repo_dir"
-		CGO_ENABLED=0 GOOS="$target_os" GOARCH="$target_arch" \
+		CGO_ENABLED=0 GOOS="$target_os" GOARCH="$target_arch" GOARM="$target_arm" \
 			go build -trimpath -o "$output" ./test_app
 	)
 }
@@ -31,7 +32,7 @@ build_target freebsd arm64
 build_target linux amd64
 build_target linux 386
 build_target linux arm64
-build_target linux arm arm32
+build_target linux arm arm32 "" 6
 build_target windows amd64 amd64 .exe
 build_target windows 386 386 .exe
 build_target windows arm64 arm64 .exe

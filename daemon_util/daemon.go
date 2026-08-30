@@ -12,6 +12,7 @@ var (
 	ErrInvalidName           = errors.New("invalid service name")
 	ErrInvalidKind           = errors.New("invalid daemon kind")
 	ErrInvalidExecutablePath = errors.New("invalid executable path")
+	ErrInvalidDependency     = errors.New("invalid dependency")
 )
 
 const managedServicePrefix = "lz_lz_"

@@ -58,8 +58,8 @@ func TestParseConfigRejectsInvalidPort(t *testing.T) {
 	}
 }
 
-func TestApplicationStartReportsPortConflict(t *testing.T) {
-	listener, err := net.Listen("tcp", ":0")
+func TestApplicationStartCanRetryAfterPortConflict(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,6 +68,13 @@ func TestApplicationStartReportsPortConflict(t *testing.T) {
 	port := listener.Addr().(*net.TCPAddr).Port
 	app := newApplication(config{Port: port}, nil, "/opt/test-app")
 	if err := app.start(); err == nil {
-		t.Fatalf("start() accepted occupied address %s", fmt.Sprintf(":%d", port))
+		t.Fatalf("start() accepted occupied address %s", fmt.Sprintf("127.0.0.1:%d", port))
 	}
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.start(); err != nil {
+		t.Fatalf("start() did not recover after the address was released: %v", err)
+	}
+	app.Stop()
 }

@@ -67,8 +67,7 @@ func (linux *openWrtRecord) Install(args ...string) (string, error) {
 	if err != nil {
 		return installAction + failed, err
 	}
-	_, err = os.Stat(execPatch)
-	if err != nil {
+	if err := validateExecutable(execPatch); err != nil {
 		return installAction + failed, err
 	}
 
@@ -236,8 +235,7 @@ start_service() {
 }
 
 restart() {
-	stop
-	start
+	stop && start
 }
 
 `

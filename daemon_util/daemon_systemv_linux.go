@@ -72,8 +72,7 @@ func (linux *systemVRecord) Install(args ...string) (string, error) {
 	if err != nil {
 		return installAction + failed, err
 	}
-	_, err = os.Stat(execPatch)
-	if err != nil {
+	if err := validateExecutable(execPatch); err != nil {
 		return installAction + failed, err
 	}
 
@@ -93,15 +92,9 @@ func (linux *systemVRecord) Install(args ...string) (string, error) {
 		return installAction + failed, err
 	}
 
-	links := linux.serviceLinks()
-	for _, link := range links {
-		if err := os.Symlink(srvPath, link); err != nil {
-			for _, cleanupLink := range links {
-				_ = os.Remove(cleanupLink)
-			}
-			_ = os.Remove(srvPath)
-			return installAction + failed, err
-		}
+	if err := createServiceLinks(srvPath, linux.serviceLinks()); err != nil {
+		_ = os.Remove(srvPath)
+		return installAction + failed, err
 	}
 
 	return installAction + success, nil
@@ -256,35 +249,47 @@ proc="{{.Name}}"
 pidfile="/var/run/$proc.pid"
 lockfile="/var/lock/subsys/$proc"
 
-[ -d $(dirname $lockfile) ] || mkdir -p $(dirname $lockfile)
+[ -d "$(dirname "$lockfile")" ] || mkdir -p "$(dirname "$lockfile")"
 
 [ -e /etc/sysconfig/$proc ] && . /etc/sysconfig/$proc
 
 start() {
-    [ -x $exec ] || exit 5
+	[ -x "$exec" ] || exit 5
 
-    if [ -f $pidfile ]; then
-        if ! [ -d "/proc/$(cat $pidfile)" ]; then
-            rm $pidfile
-            if [ -f $lockfile ]; then
-                rm $lockfile
-            fi
-        fi
-    fi
+	if [ -f "$pidfile" ]; then
+		if ! [ -d "/proc/$(cat "$pidfile")" ]; then
+			rm -f "$pidfile"
+			if [ -f "$lockfile" ]; then
+				rm -f "$lockfile"
+			fi
+		fi
+	fi
 
-    if ! [ -f $pidfile ]; then
-        printf "Starting $servname:\t"
+	if ! [ -f "$pidfile" ]; then
+		printf 'Starting %s:\t' "$servname"
 		"$exec" {{.Args}} >/dev/null 2>&1 &
-        echo $! > $pidfile
-        touch $lockfile
-        success
-        echo
-    else
-        # failure
-        echo
-        printf "$pidfile still exists...\n"
-        exit 7
-    fi
+		pid=$!
+		printf '%s\n' "$pid" > "$pidfile"
+		sleep 1
+		if kill -0 "$pid" 2>/dev/null; then
+			touch "$lockfile"
+			success
+			echo
+		else
+			wait "$pid"
+			retval=$?
+			[ "$retval" -ne 0 ] || retval=1
+			rm -f "$pidfile" "$lockfile"
+			failure
+			echo
+			return "$retval"
+		fi
+	else
+		# failure
+		echo
+		printf '%s still exists...\n' "$pidfile"
+		exit 7
+	fi
 }
 
 stop() {
@@ -297,8 +302,7 @@ stop() {
 }
 
 restart() {
-    stop
-    start
+	stop && start
 }
 
 rh_status() {

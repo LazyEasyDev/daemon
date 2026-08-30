@@ -6,7 +6,7 @@ It supports:
 
 - macOS through `launchd`
 - FreeBSD through `rc.d`
-- Linux through systemd, Upstart, OpenWrt/procd, Bobcat, or System V
+- Linux through systemd, OpenRC, Upstart, OpenWrt/procd, Bobcat, or System V
 - Windows through the Service Control Manager
 
 [Package documentation](https://pkg.go.dev/github.com/LazyEasyDev/daemon/daemon_util)
@@ -73,6 +73,8 @@ service, err := daemon.NewWithExecutable(
 ```
 
 Dependency handling is backend-specific. It is currently applied by systemd and Windows SCM.
+On systemd, every dependency must be a literal unit name with a type suffix, such as
+`network-online.target` or `worker@blue.service`.
 
 ## Daemon kinds
 
@@ -189,7 +191,7 @@ Service names may contain only:
 A-Z a-z 0-9 . _ @ -
 ```
 
-Whitespace runs are normalized to `_`. Empty names, `.` and `..` are rejected. Descriptions and dependency names must not contain NUL, carriage-return, or newline characters.
+Whitespace runs are normalized to `_`. Empty names, `.` and `..` are rejected. Descriptions and dependency names must not contain NUL, carriage-return, or newline characters. FreeBSD derives shell-safe `RCName` and `RCVar` values when a valid service name cannot be used directly as a shell variable.
 
 ## Custom templates
 
@@ -215,12 +217,14 @@ Template data depends on the backend:
 | `Args` | `[]string` | macOS |
 | `Args` | `string` | FreeBSD and Linux; already safely serialized |
 | `Dependencies` | `string` | systemd |
+| `RCName` | `string` | FreeBSD |
+| `RCVar` | `string` | FreeBSD |
 | `WorkingDirectory` | `string` | macOS |
 
 Each backend exposes its relevant escaping helper to templates:
 
 - `xml` on macOS
-- `systemdQuote` on systemd
+- `systemdQuote` and `systemdConfigQuote` on systemd
 - `shellQuote` on FreeBSD and shell-based Linux backends
 
 Templates are rendered to a temporary file and renamed atomically, preventing malformed or partially written service definitions from being installed.
@@ -240,6 +244,7 @@ if errors.Is(err, daemon.ErrAlreadyRunning) {
 | `ErrInvalidName` | The service name is empty or contains unsupported characters |
 | `ErrInvalidKind` | The daemon kind is unsupported on the current OS |
 | `ErrInvalidExecutablePath` | `NewWithExecutable` received a non-absolute path |
+| `ErrInvalidDependency` | A systemd dependency is not a literal unit name with a type suffix |
 | `ErrUnsupportedSystem` | No supported service backend was detected |
 | `ErrRootPrivileges` | The operation requires elevated privileges |
 | `ErrAlreadyInstalled` | The service definition already exists |
@@ -249,8 +254,9 @@ if errors.Is(err, daemon.ErrAlreadyRunning) {
 
 ## Platform notes
 
-- Linux chooses its backend at runtime, preferring systemd and Upstart before distribution-specific and System V backends.
-- FreeBSD may use `one<command>` when the service is not enabled in `/etc/rc.conf`.
+- Linux chooses its backend at runtime, preferring systemd, OpenRC, and Upstart before distribution-specific and System V backends.
+- OpenRC services are added to the `default` runlevel and removed from all runlevels during uninstall.
+- FreeBSD asks `service <name> enabled` and may use `one<command>` when the service is not enabled.
 - Windows service definitions are managed by SCM rather than text templates.
 - Status and lifecycle behavior ultimately depend on the native service manager.
 

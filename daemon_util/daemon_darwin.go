@@ -8,11 +8,14 @@
 package daemon_util
 
 import (
+	"errors"
+	"fmt"
 	"html"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"syscall"
 	"text/template"
 )
 
@@ -70,14 +73,20 @@ func ListServiceStatuses() ([]ServiceStatus, error) {
 	if err != nil {
 		return nil, err
 	}
-	isRunning := func(name string) bool {
-		_, running := (&darwinRecord{name: name}).checkRunning()
-		return running
+	statusDirectory := func(path string, kind Kind) serviceDirectory {
+		return serviceDirectory{
+			path:   path,
+			suffix: ".plist",
+			isRunning: func(name string) bool {
+				_, running := (&darwinRecord{name: name, kind: kind}).checkRunning()
+				return running
+			},
+		}
 	}
 	return listServiceStatuses(
-		serviceDirectory{path: filepath.Join(home, "Library", "LaunchAgents"), suffix: ".plist", isRunning: isRunning},
-		serviceDirectory{path: "/Library/LaunchAgents", suffix: ".plist", isRunning: isRunning},
-		serviceDirectory{path: "/Library/LaunchDaemons", suffix: ".plist", isRunning: isRunning},
+		statusDirectory(filepath.Join(home, "Library", "LaunchAgents"), UserAgent),
+		statusDirectory("/Library/LaunchAgents", GlobalAgent),
+		statusDirectory("/Library/LaunchDaemons", GlobalDaemon),
 	)
 }
 
@@ -96,17 +105,49 @@ func (darwin *darwinRecord) isInstalled() bool {
 	return false
 }
 
+func (darwin *darwinRecord) launchDomain() (string, error) {
+	switch darwin.kind {
+	case UserAgent:
+		return fmt.Sprintf("gui/%d", os.Getuid()), nil
+	case GlobalAgent:
+		info, err := os.Stat("/dev/console")
+		if err != nil {
+			return "", err
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || stat.Uid == 0 {
+			return "", errors.New("no logged-in GUI user")
+		}
+		return fmt.Sprintf("gui/%d", stat.Uid), nil
+	case GlobalDaemon:
+		return "system", nil
+	default:
+		return "", fmt.Errorf("%w: %q", ErrInvalidKind, darwin.kind)
+	}
+}
+
+func (darwin *darwinRecord) launchTarget() (string, error) {
+	domain, err := darwin.launchDomain()
+	if err != nil {
+		return "", err
+	}
+	return domain + "/" + darwin.name, nil
+}
+
 // Check service is running
 func (darwin *darwinRecord) checkRunning() (string, bool) {
-	output, err := exec.Command("launchctl", "list", darwin.name).Output()
+	target, err := darwin.launchTarget()
+	if err != nil {
+		return "Service is stopped", false
+	}
+	output, err := exec.Command("launchctl", "print", target).Output()
 	if err == nil {
-		if matched, err := regexp.MatchString(darwin.name, string(output)); err == nil && matched {
-			reg := regexp.MustCompile("PID\" = ([0-9]+);")
-			data := reg.FindStringSubmatch(string(output))
-			if len(data) > 1 {
-				return "Service (pid  " + data[1] + ") is running...", true
-			}
+		reg := regexp.MustCompile(`(?m)\bpid = ([0-9]+)\b`)
+		data := reg.FindStringSubmatch(string(output))
+		if len(data) > 1 {
+			return "Service (pid  " + data[1] + ") is running...", true
 		}
+		return "Service is loaded...", true
 	}
 
 	return "Service is stopped", false
@@ -134,8 +175,7 @@ func (darwin *darwinRecord) Install(args ...string) (string, error) {
 	if err != nil {
 		return installAction + failed, err
 	}
-	_, err = os.Stat(execPatch)
-	if err != nil {
+	if err := validateExecutable(execPatch); err != nil {
 		return installAction + failed, err
 	}
 
@@ -196,7 +236,11 @@ func (darwin *darwinRecord) Start() (string, error) {
 		return startAction + failed, ErrAlreadyRunning
 	}
 
-	if err := exec.Command("launchctl", "load", darwin.servicePath()).Run(); err != nil {
+	domain, err := darwin.launchDomain()
+	if err != nil {
+		return startAction + failed, err
+	}
+	if err := exec.Command("launchctl", "bootstrap", domain, darwin.servicePath()).Run(); err != nil {
 		return startAction + failed, err
 	}
 
@@ -220,7 +264,11 @@ func (darwin *darwinRecord) Stop() (string, error) {
 		return stopAction + failed, ErrAlreadyStopped
 	}
 
-	if err := exec.Command("launchctl", "unload", darwin.servicePath()).Run(); err != nil {
+	target, err := darwin.launchTarget()
+	if err != nil {
+		return stopAction + failed, err
+	}
+	if err := exec.Command("launchctl", "bootout", target).Run(); err != nil {
 		return stopAction + failed, err
 	}
 

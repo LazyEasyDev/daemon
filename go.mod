@@ -1,6 +1,6 @@
 module github.com/LazyEasyDev/daemon
 
-go 1.25.1
+go 1.25.13
 
 require (
 	github.com/urfave/cli/v3 v3.11.0

@@ -44,7 +44,8 @@ type application struct {
 	startedAt  time.Time
 	server     *http.Server
 	serveErr   chan error
-	startOnce  sync.Once
+	startMu    sync.Mutex
+	started    bool
 	stopOnce   sync.Once
 }
 
@@ -81,7 +82,7 @@ func newApplication(cfg config, args []string, executable string) *application {
 	mux.HandleFunc("/", app.handleStatus)
 	mux.HandleFunc("/healthz", app.handleHealth)
 	app.server = &http.Server{
-		Addr:              fmt.Sprintf(":%d", cfg.Port),
+		Addr:              fmt.Sprintf("127.0.0.1:%d", cfg.Port),
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
@@ -116,21 +117,24 @@ func (app *application) Start() {
 }
 
 func (app *application) start() error {
-	var startErr error
-	app.startOnce.Do(func() {
-		listener, err := net.Listen("tcp", app.server.Addr)
-		if err != nil {
-			startErr = err
-			return
+	app.startMu.Lock()
+	defer app.startMu.Unlock()
+	if app.started {
+		return nil
+	}
+
+	listener, err := net.Listen("tcp", app.server.Addr)
+	if err != nil {
+		return err
+	}
+	app.started = true
+	go func() {
+		log.Printf("test app listening on http://127.0.0.1:%d", app.config.Port)
+		if err := app.server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			app.serveErr <- err
 		}
-		go func() {
-			log.Printf("test app listening on http://127.0.0.1:%d", app.config.Port)
-			if err := app.server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				app.serveErr <- err
-			}
-		}()
-	})
-	return startErr
+	}()
+	return nil
 }
 
 func (app *application) Stop() {

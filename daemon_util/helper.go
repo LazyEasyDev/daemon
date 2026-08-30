@@ -7,6 +7,7 @@ package daemon_util
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -149,13 +150,14 @@ func sortedServiceNames(names map[string]struct{}) []string {
 }
 
 func sortedServiceStatuses(statuses map[string]string) []ServiceStatus {
-	names := make(map[string]struct{}, len(statuses))
+	names := make([]string, 0, len(statuses))
 	for name := range statuses {
-		names[name] = struct{}{}
+		names = append(names, name)
 	}
+	sort.Strings(names)
 
 	result := make([]ServiceStatus, 0, len(statuses))
-	for _, name := range sortedServiceNames(names) {
+	for _, name := range names {
 		result = append(result, ServiceStatus{Name: name, Status: statuses[name]})
 	}
 	return result
@@ -177,6 +179,35 @@ func shellQuoteArgs(args []string) string {
 	return quoteArgs(args, shellQuote)
 }
 
+func freeBSDRCName(name string) string {
+	valid := name != ""
+	for index, character := range name {
+		if character >= 'a' && character <= 'z' ||
+			character >= 'A' && character <= 'Z' ||
+			character == '_' ||
+			index > 0 && character >= '0' && character <= '9' {
+			continue
+		}
+		valid = false
+		break
+	}
+	if valid {
+		return name
+	}
+
+	var encoded strings.Builder
+	encoded.WriteString("daemon")
+	for _, character := range name {
+		encoded.WriteByte('_')
+		encoded.WriteString(strconv.FormatInt(int64(character), 16))
+	}
+	return encoded.String()
+}
+
+func freeBSDRCVar(name string) string {
+	return freeBSDRCName(name) + "_enable"
+}
+
 func systemdQuote(value string) string {
 	quoted := strconv.Quote(value)
 	quoted = strings.ReplaceAll(quoted, "$", "$$")
@@ -185,6 +216,36 @@ func systemdQuote(value string) string {
 
 func systemdQuoteArgs(args []string) string {
 	return quoteArgs(args, systemdQuote)
+}
+
+func systemdConfigQuote(value string) string {
+	return strings.ReplaceAll(strconv.Quote(value), "%", "%%")
+}
+
+func systemdConfigQuoteArgs(args []string) string {
+	return quoteArgs(args, systemdConfigQuote)
+}
+
+func validateSystemdDependencies(dependencies []string) error {
+	for _, dependency := range dependencies {
+		if dependency == "" {
+			return fmt.Errorf("%w: name must not be empty", ErrInvalidDependency)
+		}
+		for _, character := range dependency {
+			if character >= 'a' && character <= 'z' ||
+				character >= 'A' && character <= 'Z' ||
+				character >= '0' && character <= '9' ||
+				strings.ContainsRune(":_.@-", character) {
+				continue
+			}
+			return fmt.Errorf("%w %q: unsupported character %q", ErrInvalidDependency, dependency, character)
+		}
+		separator := strings.LastIndexByte(dependency, '.')
+		if separator <= 0 || separator == len(dependency)-1 {
+			return fmt.Errorf("%w %q: unit type suffix is required", ErrInvalidDependency, dependency)
+		}
+	}
+	return nil
 }
 
 func writeTemplateFile(path, name, source string, funcs template.FuncMap, data any, mode fs.FileMode) error {

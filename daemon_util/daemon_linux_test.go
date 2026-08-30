@@ -8,6 +8,50 @@ import (
 	"testing"
 )
 
+func TestSystemVDetected(t *testing.T) {
+	tests := []struct {
+		name     string
+		initPath string
+		want     bool
+	}{
+		{
+			name:     "init directory",
+			initPath: "directory",
+			want:     true,
+		},
+		{
+			name: "missing init directory",
+		},
+		{
+			name:     "init path is a file",
+			initPath: "file",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			switch test.initPath {
+			case "directory":
+				if err := os.MkdirAll(filepath.Join(root, "etc/init.d"), 0755); err != nil {
+					t.Fatal(err)
+				}
+			case "file":
+				if err := os.MkdirAll(filepath.Join(root, "etc"), 0755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(root, "etc/init.d"), nil, 0755); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			if got := systemVDetected(root); got != test.want {
+				t.Fatalf("systemVDetected() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestBuildrootStyleInitDetected(t *testing.T) {
 	tests := []struct {
 		name       string

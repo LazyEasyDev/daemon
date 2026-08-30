@@ -94,12 +94,17 @@ func newDaemon(name, description string, _ Kind, dependencies []string, executab
 		return &buildrootRecord{name: name, description: description, executablePath: executablePath, template: defaultBuildrootConfig}, nil
 	}
 
-	if info, err := os.Stat("/etc/rc.d/init.d/functions"); err == nil && !info.IsDir() {
+	if systemVDetected("/") {
 		log.Println("[warning] using default systemV type")
 		return &systemVRecord{name: name, description: description, executablePath: executablePath, template: defaultSystemVConfig}, nil
 	}
 
 	return nil, ErrUnsupportedSystem
+}
+
+func systemVDetected(root string) bool {
+	initDirectory, err := os.Stat(filepath.Join(root, "etc/init.d"))
+	return err == nil && initDirectory.IsDir()
 }
 
 func buildrootStyleInitDetected(root string) bool {

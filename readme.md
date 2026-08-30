@@ -19,9 +19,12 @@ daemon-linux-arm32<br />
 
 ## How to use
 1. Compile program according to the os-arch system. 
-2. Copy the compiled file into your project package and rename to "daemon".
-3. Run `sudo ./daemon install <service-name> <app> [app arguments...]` to install a service.
-4. Manage it with `start`, `stop`, `restart`, `status`, or `remove` using the service name.
+2. Copy the compiled file into your project package and rename it to `daemon` (`daemon.exe` on Windows).
+3. Install the service using the privileges required by your platform:
+	- macOS: run without `sudo`. The current implementation installs a per-user LaunchAgent.
+	- Linux and FreeBSD: run with `sudo` because the service is installed system-wide.
+	- Windows: use PowerShell or Command Prompt opened with **Run as administrator**. Windows Server does not require a `sudo` command.
+4. Manage it with `start`, `stop`, `restart`, `status`, or `remove` using the same privilege mode.
 
 ### for example
 ```
@@ -33,12 +36,12 @@ daemon-linux-arm32<br />
 │  └─daemon    //daemon file compiled and copy from this package
 ```
 
-The service name is explicit and independent from the executable filename. It may contain `A-Z`, `a-z`, `0-9`, `.`, `_`, `@`, and `-`. Internally, registrations use the reserved `lz_lz_` prefix; commands and list output hide this implementation detail. A relative executable name is resolved beside the daemon binary. An executable in another folder can be installed using its absolute path.
+The service name is explicit and independent from the executable filename. It may contain `A-Z`, `a-z`, `0-9`, `.`, `_`, `@`, and `-`. A relative executable name is resolved beside the daemon binary. An executable in another folder can be installed using its absolute path.
 
 
-run cmd
-```
-//enter {your-project-folder}
+### Linux and FreeBSD
+
+```sh
 cd ./{your-project-folder}
 
 sudo ./daemon install my-service myapp [arg1] [arg2] ...
@@ -51,6 +54,38 @@ sudo ./daemon status my-service
 sudo ./daemon restart my-service
 sudo ./daemon stop my-service
 sudo ./daemon remove my-service
+```
+
+### macOS
+
+Do not use `sudo`; it would create the per-user LaunchAgent for the root user instead of the logged-in user.
+
+```sh
+cd ./{your-project-folder}
+
+./daemon install my-service myapp [arg1] [arg2] ...
+./daemon list
+./daemon start my-service
+./daemon status my-service
+./daemon restart my-service
+./daemon stop my-service
+./daemon remove my-service
+```
+
+### Windows PowerShell
+
+Open PowerShell with **Run as administrator**, then run:
+
+```powershell
+cd C:\path\to\your-project-folder
+
+.\daemon.exe install my-service .\myapp.exe [arg1] [arg2] ...
+.\daemon.exe list
+.\daemon.exe start my-service
+.\daemon.exe status my-service
+.\daemon.exe restart my-service
+.\daemon.exe stop my-service
+.\daemon.exe remove my-service
 ```
 
 `list` and `ls` show each managed service and its current status:

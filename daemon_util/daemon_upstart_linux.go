@@ -196,7 +196,6 @@ func (linux *upstartRecord) SetTemplate(tplStr string) error {
 const defaultUpstartConfig = `# {{.Name}} {{.Description}}
 
 description     {{shellQuote .Description}}
-author          "Pichu Chen <pichu@tih.tw>"
 
 start on runlevel [2345]
 stop on runlevel [016]

@@ -13,21 +13,21 @@ import (
 	"text/template"
 )
 
-// bobCatRecord - standard record (struct) for linux openWrtRecord version of daemon package
-type bobCatRecord struct {
+// buildrootRecord manages services started directly from /etc/init.d.
+type buildrootRecord struct {
 	name           string
 	description    string
 	executablePath string
 	template       string
 }
 
-// Standard service path for systemV daemons
-func (linux *bobCatRecord) servicePath() string {
+// Standard service path for Buildroot-style daemons
+func (linux *buildrootRecord) servicePath() string {
 	return "/etc/init.d/S90" + linux.name
 }
 
 // Is a service installed
-func (linux *bobCatRecord) isInstalled() bool {
+func (linux *buildrootRecord) isInstalled() bool {
 
 	if _, err := os.Stat(linux.servicePath()); err == nil {
 		return true
@@ -37,7 +37,7 @@ func (linux *bobCatRecord) isInstalled() bool {
 }
 
 // Check service is running
-func (linux *bobCatRecord) checkRunning() (string, bool) {
+func (linux *buildrootRecord) checkRunning() (string, bool) {
 	srvPath := linux.servicePath()
 	output, err := exec.Command(srvPath, "status").Output()
 	if err == nil && strings.Contains(string(output), "running") {
@@ -48,7 +48,7 @@ func (linux *bobCatRecord) checkRunning() (string, bool) {
 }
 
 // Install the service
-func (linux *bobCatRecord) Install(args ...string) (string, error) {
+func (linux *buildrootRecord) Install(args ...string) (string, error) {
 	installAction := "Install " + linux.description + ":"
 
 	if ok, err := checkPrivileges(); !ok {
@@ -74,7 +74,7 @@ func (linux *bobCatRecord) Install(args ...string) (string, error) {
 	}
 	if err := writeTemplateFile(
 		srvPath,
-		"bobCatConfig",
+		"buildrootConfig",
 		linux.template,
 		funcs,
 		&struct {
@@ -91,7 +91,7 @@ func (linux *bobCatRecord) Install(args ...string) (string, error) {
 }
 
 // Remove the service
-func (linux *bobCatRecord) Remove() (string, error) {
+func (linux *buildrootRecord) Remove() (string, error) {
 	removeAction := "Removing " + linux.description + ":"
 
 	if ok, err := checkPrivileges(); !ok {
@@ -110,7 +110,7 @@ func (linux *bobCatRecord) Remove() (string, error) {
 }
 
 // Start the service
-func (linux *bobCatRecord) Start() (string, error) {
+func (linux *buildrootRecord) Start() (string, error) {
 	startAction := "Starting " + linux.description + ":"
 
 	if ok, err := checkPrivileges(); !ok {
@@ -134,7 +134,7 @@ func (linux *bobCatRecord) Start() (string, error) {
 }
 
 // Stop the service
-func (linux *bobCatRecord) Stop() (string, error) {
+func (linux *buildrootRecord) Stop() (string, error) {
 	stopAction := "Stopping " + linux.description + ":"
 
 	if ok, err := checkPrivileges(); !ok {
@@ -158,7 +158,7 @@ func (linux *bobCatRecord) Stop() (string, error) {
 }
 
 // Status - Get service status
-func (linux *bobCatRecord) Status() (string, error) {
+func (linux *buildrootRecord) Status() (string, error) {
 
 	if ok, err := checkPrivileges(); !ok {
 		return "", err
@@ -173,24 +173,24 @@ func (linux *bobCatRecord) Status() (string, error) {
 }
 
 // Run - Run service
-func (linux *bobCatRecord) Run(e Executable) (string, error) {
+func (linux *buildrootRecord) Run(e Executable) (string, error) {
 	runAction := "Running " + linux.description + ":"
 	e.Run()
 	return runAction + " completed.", nil
 }
 
 // GetTemplate - gets service config template
-func (linux *bobCatRecord) GetTemplate() string {
+func (linux *buildrootRecord) GetTemplate() string {
 	return linux.template
 }
 
 // SetTemplate - sets service config template
-func (linux *bobCatRecord) SetTemplate(tplStr string) error {
+func (linux *buildrootRecord) SetTemplate(tplStr string) error {
 	linux.template = tplStr
 	return nil
 }
 
-const defaultBobCatConfig = `#!/bin/sh
+const defaultBuildrootConfig = `#!/bin/sh
 
 NAME={{shellQuote .Name}}
 DAEMON={{shellQuote .Path}}
@@ -212,8 +212,8 @@ is_running() {
 
 do_start() {
 	echo -n "Starting $NAME: "
-	if start-stop-daemon --start --quiet --background --make-pidfile \
-		--pidfile "$PIDFILE" --exec "$DAEMON" -- {{.Args}}; then
+	if start-stop-daemon -S -q -b -m \
+		-p "$PIDFILE" -x "$DAEMON" -- {{.Args}}; then
 		sleep 1
 		if is_running; then
 			echo "OK"
@@ -234,7 +234,7 @@ do_stop() {
 		echo "FAIL"
 		return 1
 	fi
-	if start-stop-daemon --stop --quiet --pidfile "$PIDFILE" --exec "$DAEMON"; then
+	if start-stop-daemon -K -q -p "$PIDFILE" -x "$DAEMON"; then
 		retries=12
 		while kill -0 "$pid" 2>/dev/null && [ "$retries" -gt 0 ]; do
 			sleep 1

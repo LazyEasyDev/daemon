@@ -8,6 +8,8 @@
 *.so
 *.dylib
 
+daemon
+
 # Test binary, built with `go test -c`
 /test_app/build/
 /test_app/build/.DS_Store

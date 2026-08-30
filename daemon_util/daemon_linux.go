@@ -19,10 +19,6 @@ var openwrtNameArr = []string{
 	"wrt",
 }
 
-var bobcatNameArr = []string{
-	"bobcat",
-}
-
 // ListServices returns user-facing names of services registered by this tool.
 func ListServices() ([]string, error) {
 	return listServiceFiles(
@@ -93,9 +89,9 @@ func newDaemon(name, description string, _ Kind, dependencies []string, executab
 		return &openWrtRecord{name: name, description: description, executablePath: executablePath, template: defaultOpenWrtConfig}, nil
 	}
 
-	if containsAny(identity, bobcatNameArr) {
-		log.Println("[info] bobcat detected")
-		return &bobCatRecord{name: name, description: description, executablePath: executablePath, template: defaultBobCatConfig}, nil
+	if buildrootStyleInitDetected("/") {
+		log.Println("[info] buildroot-style init detected")
+		return &buildrootRecord{name: name, description: description, executablePath: executablePath, template: defaultBuildrootConfig}, nil
 	}
 
 	if info, err := os.Stat("/etc/rc.d/init.d/functions"); err == nil && !info.IsDir() {
@@ -104,6 +100,28 @@ func newDaemon(name, description string, _ Kind, dependencies []string, executab
 	}
 
 	return nil, ErrUnsupportedSystem
+}
+
+func buildrootStyleInitDetected(root string) bool {
+	rcSPath := filepath.Join(root, "etc/init.d/rcS")
+	rcS, err := os.ReadFile(rcSPath)
+	if err != nil || !strings.Contains(string(rcS), "/etc/init.d/S??*") {
+		return false
+	}
+
+	for _, path := range []string{
+		"sbin/start-stop-daemon",
+		"usr/sbin/start-stop-daemon",
+		"bin/start-stop-daemon",
+		"usr/bin/start-stop-daemon",
+	} {
+		info, err := os.Stat(filepath.Join(root, path))
+		if err == nil && !info.IsDir() && info.Mode().Perm()&0111 != 0 {
+			return true
+		}
+	}
+
+	return false
 }
 
 func containsAny(value string, identifiers []string) bool {

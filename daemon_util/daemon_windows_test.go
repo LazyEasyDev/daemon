@@ -5,6 +5,7 @@ package daemon_util
 import (
 	"errors"
 	"os"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -59,7 +60,7 @@ func TestStopAndWaitDoesNotStopAgainWhilePending(t *testing.T) {
 		{State: svc.StopPending},
 		{State: svc.Stopped},
 	}}
-	if err := stopAndWait(service); err != nil {
+	if err := stopAndWait(service, DefaultStopTimeout); err != nil {
 		t.Fatal(err)
 	}
 	if service.controlCalls != 0 {
@@ -69,8 +70,19 @@ func TestStopAndWaitDoesNotStopAgainWhilePending(t *testing.T) {
 
 func TestStopAndWaitReportsAlreadyStopped(t *testing.T) {
 	service := &fakeWindowsService{statuses: []svc.Status{{State: svc.Stopped}}}
-	if err := stopAndWait(service); !errors.Is(err, winapi.ERROR_SERVICE_NOT_ACTIVE) {
+	if err := stopAndWait(service, DefaultStopTimeout); !errors.Is(err, winapi.ERROR_SERVICE_NOT_ACTIVE) {
 		t.Fatalf("error = %v, want %v", err, winapi.ERROR_SERVICE_NOT_ACTIVE)
+	}
+}
+
+func TestStopAndWaitUsesConfiguredTimeoutWithoutKilling(t *testing.T) {
+	service := &fakeWindowsService{statuses: []svc.Status{{State: svc.Running}}}
+	err := stopAndWait(service, time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "timed out waiting for service state") {
+		t.Fatalf("error = %v, want timeout", err)
+	}
+	if service.controlCalls != 1 {
+		t.Fatalf("Control calls = %d, want 1", service.controlCalls)
 	}
 }
 

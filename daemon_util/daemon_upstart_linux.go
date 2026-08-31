@@ -15,6 +15,7 @@ import (
 
 // upstartRecord - standard record (struct) for linux upstart version of daemon package
 type upstartRecord struct {
+	serviceConfig
 	name           string
 	description    string
 	executablePath string
@@ -39,18 +40,21 @@ func (linux *upstartRecord) isInstalled() bool {
 // Check service is running
 func (linux *upstartRecord) checkRunning() (string, bool) {
 	output, err := exec.Command("status", linux.name).Output()
-	if err == nil {
-		if matched, err := regexp.MatchString(linux.name+" start/running", string(output)); err == nil && matched {
-			reg := regexp.MustCompile("process ([0-9]+)")
-			data := reg.FindStringSubmatch(string(output))
-			if len(data) > 1 {
-				return "Service (pid  " + data[1] + ") is running...", true
-			}
-			return "Service is running...", true
+	if err == nil && upstartStatusActive(linux.name, string(output)) {
+		reg := regexp.MustCompile("process ([0-9]+)")
+		data := reg.FindStringSubmatch(string(output))
+		if len(data) > 1 {
+			return "Service (pid  " + data[1] + ") is running...", true
 		}
+		return "Service is running...", true
 	}
 
 	return "Service is stopped", false
+}
+
+func upstartStatusActive(name, status string) bool {
+	matched, err := regexp.MatchString(`^`+regexp.QuoteMeta(name)+` start/`, status)
+	return err == nil && matched
 }
 
 // Install the service
@@ -85,7 +89,8 @@ func (linux *upstartRecord) Install(args ...string) (string, error) {
 		funcs,
 		&struct {
 			Name, Description, Path, Args string
-		}{linux.name, linux.description, execPatch, shellQuoteArgs(args)},
+			StopTimeoutSeconds            int64
+		}{linux.name, linux.description, execPatch, shellQuoteArgs(args), linux.stopTimeoutSeconds()},
 		0644,
 	); err != nil {
 		return installAction + failed, err
@@ -201,7 +206,7 @@ start on runlevel [2345]
 stop on runlevel [016]
 
 respawn
-#kill timeout 5
+kill timeout {{.StopTimeoutSeconds}}
 
 exec {{shellQuote .Path}} {{.Args}}
 `

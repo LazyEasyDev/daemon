@@ -17,6 +17,7 @@ import (
 
 // systemVRecord - standard record (struct) for linux systemV version of daemon package
 type bsdRecord struct {
+	serviceConfig
 	name           string
 	description    string
 	executablePath string
@@ -133,7 +134,8 @@ func (bsd *bsdRecord) Install(args ...string) (string, error) {
 		funcs,
 		&struct {
 			Name, RCName, RCVar, Description, Path, Args string
-		}{bsd.name, freeBSDRCName(bsd.name), freeBSDRCVar(bsd.name), bsd.description, execPatch, shellQuoteArgs(args)},
+			StopTimeoutSeconds                           int64
+		}{bsd.name, freeBSDRCName(bsd.name), freeBSDRCVar(bsd.name), bsd.description, execPatch, shellQuoteArgs(args), bsd.stopTimeoutSeconds()},
 		0755,
 	); err != nil {
 		return installAction + failed, err
@@ -260,11 +262,52 @@ rcvar={{shellQuote .RCVar}}
 command="/usr/sbin/daemon"
 app_command={{shellQuote .Path}}
 pidfile="/var/run/$name.pid"
+child_pidfile="/var/run/$name.child.pid"
+stop_timeout={{.StopTimeoutSeconds}}
 
 start_cmd="daemon_start"
+stop_cmd="daemon_stop"
 daemon_start()
 {
-	"$command" -R 30 -P "$pidfile" -f "$app_command" {{.Args}}
+	"$command" -R 30 -P "$pidfile" -p "$child_pidfile" -f "$app_command" {{.Args}}
+}
+daemon_stop()
+{
+	supervisor_pid=$rc_pid
+	kill -TERM "$supervisor_pid" 2>/dev/null || return 1
+
+	elapsed=0
+	while kill -0 "$supervisor_pid" 2>/dev/null; do
+		if [ "$elapsed" -ge "$stop_timeout" ]; then
+			child_pid=$(check_pidfile "$child_pidfile" "$app_command")
+			if [ -n "$child_pid" ] && ! kill -KILL "$child_pid" 2>/dev/null; then
+				return 1
+			fi
+			if kill -0 "$supervisor_pid" 2>/dev/null && ! kill -KILL "$supervisor_pid" 2>/dev/null; then
+				return 1
+			fi
+
+			force_elapsed=0
+			while [ "$force_elapsed" -lt 5 ]; do
+				supervisor_running=false
+				kill -0 "$supervisor_pid" 2>/dev/null && supervisor_running=true
+				child_pid=$(check_pidfile "$child_pidfile" "$app_command")
+				if ! $supervisor_running && [ -z "$child_pid" ]; then
+					break
+				fi
+				sleep 1
+				force_elapsed=$((force_elapsed + 1))
+			done
+			child_pid=$(check_pidfile "$child_pidfile" "$app_command")
+			if kill -0 "$supervisor_pid" 2>/dev/null || [ -n "$child_pid" ]; then
+				return 1
+			fi
+			break
+		fi
+		sleep 1
+		elapsed=$((elapsed + 1))
+	done
+	rm -f "$pidfile" "$child_pidfile"
 }
 load_rc_config $name
 run_rc_command "$1"

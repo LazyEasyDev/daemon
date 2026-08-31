@@ -15,6 +15,7 @@ import (
 
 // openWrtRecord - standard record (struct) for linux openWrtRecord version of daemon package
 type openWrtRecord struct {
+	serviceConfig
 	name           string
 	description    string
 	executablePath string
@@ -81,7 +82,8 @@ func (linux *openWrtRecord) Install(args ...string) (string, error) {
 		funcs,
 		&struct {
 			Name, Description, Path, Args string
-		}{linux.name, linux.description, execPatch, shellQuoteArgs(args)},
+			StopTimeoutSeconds            int64
+		}{linux.name, linux.description, execPatch, shellQuoteArgs(args), linux.stopTimeoutSeconds()},
 		0755,
 	); err != nil {
 		return installAction + failed, err
@@ -155,10 +157,6 @@ func (linux *openWrtRecord) Stop() (string, error) {
 		return stopAction + failed, ErrNotInstalled
 	}
 
-	if _, ok := linux.checkRunning(); !ok {
-		return stopAction + failed, ErrAlreadyStopped
-	}
-
 	srvPath := linux.servicePath()
 	if err := exec.Command(srvPath, "stop").Run(); err != nil {
 		return stopAction + failed, err
@@ -226,6 +224,7 @@ start_service() {
 
 	# threshold:0; timeout:30; retry:0 (unlimited)
 	procd_set_param respawn 0 30 0
+	procd_set_param term_timeout {{.StopTimeoutSeconds}}
 	
 	# run 
 	procd_set_param command "$PROG" {{.Args}}

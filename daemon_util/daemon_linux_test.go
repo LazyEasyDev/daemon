@@ -3,11 +3,53 @@
 package daemon_util
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"text/template"
 )
+
+func TestLinuxTemplatesConfigureStopTimeout(t *testing.T) {
+	data := struct {
+		Name, Description, Dependencies, Path, Args string
+		StopTimeoutSeconds                          int64
+	}{"worker", "worker", "", "/opt/worker", "", 45}
+	funcs := template.FuncMap{
+		"shellQuote":         shellQuote,
+		"systemdQuote":       systemdQuote,
+		"systemdConfigQuote": systemdConfigQuote,
+	}
+	tests := []struct {
+		name   string
+		source string
+		want   string
+	}{
+		{name: "systemd", source: defaultSystemDConfig, want: "TimeoutStopSec=45s"},
+		{name: "OpenRC", source: defaultOpenRCConfig, want: `retry="TERM/45/KILL/5"`},
+		{name: "OpenWrt", source: defaultOpenWrtConfig, want: "procd_set_param term_timeout 45"},
+		{name: "Upstart", source: defaultUpstartConfig, want: "kill timeout 45"},
+		{name: "System V", source: defaultSystemVConfig, want: "stop_timeout=45"},
+		{name: "Buildroot", source: defaultBuildrootConfig, want: "STOP_TIMEOUT=45"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tpl, err := template.New(test.name).Funcs(funcs).Parse(test.source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var output bytes.Buffer
+			if err := tpl.Execute(&output, data); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(output.String(), test.want) {
+				t.Fatalf("rendered template does not contain %q", test.want)
+			}
+		})
+	}
+}
 
 func TestOpenWrtRespawnsWithoutRetryLimit(t *testing.T) {
 	if !strings.Contains(defaultOpenWrtConfig, "procd_set_param respawn 0 30 0") {
@@ -30,6 +72,61 @@ func TestOpenRCRespawnsWithoutRetryLimit(t *testing.T) {
 	}
 	if strings.Contains(defaultOpenRCConfig, "command_background=yes") {
 		t.Fatal("OpenRC config must leave the application in the foreground")
+	}
+}
+
+func TestUpstartStatusActive(t *testing.T) {
+	tests := []struct {
+		status string
+		want   bool
+	}{
+		{status: "worker start/starting", want: true},
+		{status: "worker start/pre-start, process 101", want: true},
+		{status: "worker start/spawned, process 102", want: true},
+		{status: "worker start/post-start, process 103", want: true},
+		{status: "worker start/running, process 104", want: true},
+		{status: "worker stop/stopping, process 104"},
+		{status: "worker stop/waiting"},
+		{status: "other start/running, process 104"},
+	}
+
+	for _, test := range tests {
+		if got := upstartStatusActive("worker", test.status); got != test.want {
+			t.Errorf("upstartStatusActive(%q) = %v, want %v", test.status, got, test.want)
+		}
+	}
+}
+
+func TestBuildrootValidatesProcessBeforeSignals(t *testing.T) {
+	for _, command := range []string{
+		`start-stop-daemon -K -t -q -p "$PIDFILE" -x "$DAEMON"`,
+		`start-stop-daemon -K -q -s KILL -p "$PIDFILE" -x "$DAEMON"`,
+	} {
+		if !strings.Contains(defaultBuildrootConfig, command) {
+			t.Fatalf("Buildroot config does not contain %q", command)
+		}
+	}
+	for _, command := range []string{`kill -0 "$pid"`, `kill -KILL "$pid"`} {
+		if strings.Contains(defaultBuildrootConfig, command) {
+			t.Fatalf("Buildroot config still contains raw PID operation %q", command)
+		}
+	}
+}
+
+func TestSystemVValidatesProcessBeforeSignals(t *testing.T) {
+	for _, command := range []string{
+		`[ "$pid" -gt 1 ]`,
+		`[ "$exec" -ef "/proc/$pid/exe" ]`,
+		`tr '\000' '\n' < "/proc/$pid/cmdline" | grep -Fqx "$exec"`,
+		`if ! is_expected_process; then`,
+		`if is_expected_process && ! kill -KILL "$pid"`,
+	} {
+		if !strings.Contains(defaultSystemVConfig, command) {
+			t.Fatalf("System V config does not contain %q", command)
+		}
+	}
+	if strings.Contains(defaultSystemVConfig, `while kill -0 "$pid"`) {
+		t.Fatal("System V stop loop still trusts raw PID liveness")
 	}
 }
 

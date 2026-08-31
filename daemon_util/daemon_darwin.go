@@ -21,6 +21,7 @@ import (
 
 // darwinRecord - standard record (struct) for darwin version of daemon package
 type darwinRecord struct {
+	serviceConfig
 	name           string
 	description    string
 	kind           Kind
@@ -190,7 +191,8 @@ func (darwin *darwinRecord) Install(args ...string) (string, error) {
 		&struct {
 			Name, Path, WorkingDirectory string
 			Args                         []string
-		}{darwin.name, execPatch, filepath.Dir(execPatch), args},
+			StopTimeoutSeconds           int64
+		}{darwin.name, execPatch, filepath.Dir(execPatch), args, darwin.stopTimeoutSeconds()},
 		0644,
 	); err != nil {
 		return installAction + failed, err
@@ -316,6 +318,8 @@ const defaultPropertyList = `<?xml version="1.0" encoding="UTF-8"?>
 <dict>
 	<key>KeepAlive</key>
 	<true/>
+	<key>ExitTimeOut</key>
+	<integer>{{.StopTimeoutSeconds}}</integer>
 	<key>Label</key>
 	<string>{{xml .Name}}</string>
 	<key>ProgramArguments</key>

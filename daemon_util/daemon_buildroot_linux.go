@@ -15,6 +15,7 @@ import (
 
 // buildrootRecord manages services started directly from /etc/init.d.
 type buildrootRecord struct {
+	serviceConfig
 	name           string
 	description    string
 	executablePath string
@@ -79,7 +80,8 @@ func (linux *buildrootRecord) Install(args ...string) (string, error) {
 		funcs,
 		&struct {
 			Name, Description, Path, Args string
-		}{linux.name, linux.description, execPatch, shellQuoteArgs(args)},
+			StopTimeoutSeconds            int64
+		}{linux.name, linux.description, execPatch, shellQuoteArgs(args), linux.stopTimeoutSeconds()},
 		0755,
 	); err != nil {
 		return installAction + failed, err
@@ -195,6 +197,7 @@ const defaultBuildrootConfig = `#!/bin/sh
 NAME={{shellQuote .Name}}
 DAEMON={{shellQuote .Path}}
 PIDFILE=${PIDFILE:-/var/run/$NAME.pid}
+STOP_TIMEOUT={{.StopTimeoutSeconds}}
 
 [ -r "/etc/default/$NAME" ] && . "/etc/default/$NAME" "$1"
 
@@ -207,7 +210,7 @@ read_pid() {
 }
 
 is_running() {
-	read_pid && kill -0 "$pid" 2>/dev/null
+	read_pid && start-stop-daemon -K -t -q -p "$PIDFILE" -x "$DAEMON"
 }
 
 do_start() {
@@ -235,12 +238,23 @@ do_stop() {
 		return 1
 	fi
 	if start-stop-daemon -K -q -p "$PIDFILE" -x "$DAEMON"; then
-		retries=12
-		while kill -0 "$pid" 2>/dev/null && [ "$retries" -gt 0 ]; do
+		elapsed=0
+		while is_running && [ "$elapsed" -lt "$STOP_TIMEOUT" ]; do
 			sleep 1
-			retries=$((retries - 1))
+			elapsed=$((elapsed + 1))
 		done
-		if kill -0 "$pid" 2>/dev/null; then
+		if is_running; then
+			if ! start-stop-daemon -K -q -s KILL -p "$PIDFILE" -x "$DAEMON"; then
+				echo "FAIL"
+				return 1
+			fi
+		fi
+		force_elapsed=0
+		while is_running && [ "$force_elapsed" -lt 5 ]; do
+			sleep 1
+			force_elapsed=$((force_elapsed + 1))
+		done
+		if is_running; then
 			echo "FAIL"
 			return 1
 		fi

@@ -16,6 +16,7 @@ import (
 
 // systemVRecord - standard record (struct) for linux systemV version of daemon package
 type systemVRecord struct {
+	serviceConfig
 	name           string
 	description    string
 	executablePath string
@@ -86,7 +87,8 @@ func (linux *systemVRecord) Install(args ...string) (string, error) {
 		funcs,
 		&struct {
 			Name, Description, Path, Args string
-		}{linux.name, linux.description, execPatch, shellQuoteArgs(args)},
+			StopTimeoutSeconds            int64
+		}{linux.name, linux.description, execPatch, shellQuoteArgs(args), linux.stopTimeoutSeconds()},
 		0755,
 	); err != nil {
 		return installAction + failed, err
@@ -248,16 +250,33 @@ servname={{shellQuote .Description}}
 proc="{{.Name}}"
 pidfile="/var/run/$proc.pid"
 lockfile="/var/lock/subsys/$proc"
+stop_timeout={{.StopTimeoutSeconds}}
 
 [ -d "$(dirname "$lockfile")" ] || mkdir -p "$(dirname "$lockfile")"
 
 [ -e /etc/sysconfig/$proc ] && . /etc/sysconfig/$proc
 
+read_pid() {
+	[ -r "$pidfile" ] || return 1
+	pid=$(cat "$pidfile")
+	case "$pid" in
+		''|*[!0-9]*) return 1 ;;
+	esac
+	[ "$pid" -gt 1 ]
+}
+
+is_expected_process() {
+	read_pid || return 1
+	[ "$exec" -ef "/proc/$pid/exe" ] && return 0
+	[ -r "/proc/$pid/cmdline" ] || return 1
+	tr '\000' '\n' < "/proc/$pid/cmdline" | grep -Fqx "$exec"
+}
+
 start() {
 	[ -x "$exec" ] || exit 5
 
 	if [ -f "$pidfile" ]; then
-		if ! [ -d "/proc/$(cat "$pidfile")" ]; then
+		if read_pid && ! is_expected_process && ! kill -0 "$pid" 2>/dev/null; then
 			rm -f "$pidfile"
 			if [ -f "$lockfile" ]; then
 				rm -f "$lockfile"
@@ -271,7 +290,7 @@ start() {
 		pid=$!
 		printf '%s\n' "$pid" > "$pidfile"
 		sleep 1
-		if kill -0 "$pid" 2>/dev/null; then
+		if is_expected_process; then
 			touch "$lockfile"
 			success
 			echo
@@ -293,12 +312,53 @@ start() {
 }
 
 stop() {
-    echo -n $"Stopping $servname: "
-    killproc -p $pidfile $proc
-    retval=$?
-    echo
-    [ $retval -eq 0 ] && rm -f $lockfile
-    return $retval
+	echo -n $"Stopping $servname: "
+	if ! read_pid; then
+		failure
+		echo
+		return 1
+	fi
+	if ! kill -0 "$pid" 2>/dev/null; then
+		rm -f "$pidfile" "$lockfile"
+		success
+		echo
+		return 0
+	fi
+	if ! is_expected_process; then
+		failure
+		echo
+		return 1
+	fi
+	if ! kill -TERM "$pid" 2>/dev/null; then
+		failure
+		echo
+		return 1
+	fi
+
+	elapsed=0
+	while is_expected_process && [ "$elapsed" -lt "$stop_timeout" ]; do
+		sleep 1
+		elapsed=$((elapsed + 1))
+	done
+	if is_expected_process && ! kill -KILL "$pid" 2>/dev/null; then
+		failure
+		echo
+		return 1
+	fi
+	force_elapsed=0
+	while is_expected_process && [ "$force_elapsed" -lt 5 ]; do
+		sleep 1
+		force_elapsed=$((force_elapsed + 1))
+	done
+	if is_expected_process || kill -0 "$pid" 2>/dev/null; then
+		failure
+		echo
+		return 1
+	fi
+	rm -f "$pidfile" "$lockfile"
+	success
+	echo
+	return 0
 }
 
 restart() {

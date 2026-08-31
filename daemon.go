@@ -30,6 +30,21 @@ func newService(serviceName, executablePath string) (daemon_util.Daemon, error) 
 	return daemon_util.New(registrationName, serviceName, kind)
 }
 
+func configuredService(command *cli.Command, serviceName, executablePath string) (daemon_util.Daemon, error) {
+	service, err := newService(serviceName, executablePath)
+	if err != nil {
+		return nil, err
+	}
+	timeout := command.Duration("stop-timeout")
+	if timeout == 0 {
+		timeout = daemon_util.DefaultStopTimeout
+	}
+	if err := daemon_util.ConfigureStopTimeout(service, timeout); err != nil {
+		return nil, err
+	}
+	return service, nil
+}
+
 func executablePathFromTarget(target string) (string, error) {
 	if target == "" {
 		return "", errors.New("executable path error")
@@ -53,7 +68,7 @@ func install(_ context.Context, command *cli.Command) error {
 	if err != nil {
 		return err
 	}
-	service, err := newService(args[0], executablePath)
+	service, err := configuredService(command, args[0], executablePath)
 	if err != nil {
 		return err
 	}
@@ -89,7 +104,7 @@ func writeServiceList(output io.Writer, services []daemon_util.ServiceStatus) er
 }
 
 func remove(_ context.Context, command *cli.Command) error {
-	service, err := newService(command.Args().First(), "")
+	service, err := configuredService(command, command.Args().First(), "")
 	if err != nil {
 		return err
 	}
@@ -121,7 +136,7 @@ func start(_ context.Context, command *cli.Command) error {
 }
 
 func stop(_ context.Context, command *cli.Command) error {
-	service, err := newService(command.Args().First(), "")
+	service, err := configuredService(command, command.Args().First(), "")
 	if err != nil {
 		return err
 	}
@@ -135,7 +150,7 @@ func stop(_ context.Context, command *cli.Command) error {
 }
 
 func restart(_ context.Context, command *cli.Command) error {
-	service, err := newService(command.Args().First(), "")
+	service, err := configuredService(command, command.Args().First(), "")
 	if err != nil {
 		return err
 	}

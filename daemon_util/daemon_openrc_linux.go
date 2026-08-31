@@ -11,6 +11,7 @@ import (
 )
 
 type openRCRecord struct {
+	serviceConfig
 	name           string
 	description    string
 	executablePath string
@@ -68,7 +69,8 @@ func (linux *openRCRecord) Install(args ...string) (string, error) {
 		template.FuncMap{"shellQuote": shellQuote},
 		&struct {
 			Name, Description, Path, Args string
-		}{linux.name, linux.description, executablePath, shellQuoteArgs(args)},
+			StopTimeoutSeconds            int64
+		}{linux.name, linux.description, executablePath, shellQuoteArgs(args), linux.stopTimeoutSeconds()},
 		0755,
 	); err != nil {
 		return installAction + failed, err
@@ -178,7 +180,7 @@ supervisor=supervise-daemon
 respawn_delay=30
 respawn_max=0
 pidfile="/run/${RC_SVCNAME}.pid"
-retry="TERM/12/KILL/5"
+retry="TERM/{{.StopTimeoutSeconds}}/KILL/5"
 
 depend() {
 	need localmount

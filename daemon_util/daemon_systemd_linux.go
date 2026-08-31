@@ -14,6 +14,7 @@ import (
 
 // systemDRecord - standard record (struct) for linux systemD version of daemon package
 type systemDRecord struct {
+	serviceConfig
 	name           string
 	description    string
 	dependencies   []string
@@ -78,12 +79,14 @@ func (linux *systemDRecord) Install(args ...string) (string, error) {
 		funcs,
 		&struct {
 			Name, Description, Dependencies, Path, Args string
+			StopTimeoutSeconds                          int64
 		}{
 			linux.name,
 			linux.description,
 			systemdConfigQuoteArgs(linux.dependencies),
 			execPatch,
 			systemdQuoteArgs(args),
+			linux.stopTimeoutSeconds(),
 		},
 		0644,
 	); err != nil {
@@ -166,10 +169,6 @@ func (linux *systemDRecord) Stop() (string, error) {
 		return stopAction + failed, ErrNotInstalled
 	}
 
-	if _, ok := linux.checkRunning(); !ok {
-		return stopAction + failed, ErrAlreadyStopped
-	}
-
 	if err := exec.Command("systemctl", "stop", linux.name+".service").Run(); err != nil {
 		return stopAction + failed, err
 	}
@@ -221,6 +220,7 @@ Type=exec
 ExecStart={{systemdQuote .Path}} {{.Args}}
 Restart=on-failure
 RestartSec=20s
+TimeoutStopSec={{.StopTimeoutSeconds}}s
 
 [Install]
 WantedBy=multi-user.target

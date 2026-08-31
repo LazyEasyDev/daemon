@@ -5,8 +5,10 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/urfave/cli/v3"
 
@@ -65,6 +67,60 @@ func TestInstallCommandPreservesArgumentsAfterAbsolutePath(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("install arguments = %q, want %q", got, want)
+	}
+}
+
+func TestInstallCommandParsesStopTimeoutBeforeApplication(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows configures the wait timeout when stopping")
+	}
+	app := newCommand()
+	installCommand := app.Command("install")
+	if installCommand == nil {
+		t.Fatal("install command not found")
+	}
+
+	var gotTimeout time.Duration
+	var gotArgs []string
+	installCommand.Action = func(_ context.Context, command *cli.Command) error {
+		gotTimeout = command.Duration("stop-timeout")
+		gotArgs = command.Args().Slice()
+		return nil
+	}
+
+	args := []string{"daemon-util", "install", "--stop-timeout", "45s", "worker", "myapp", "--port", "8080"}
+	if err := app.Run(context.Background(), args); err != nil {
+		t.Fatal(err)
+	}
+	if gotTimeout != 45*time.Second {
+		t.Fatalf("stop timeout = %v, want 45s", gotTimeout)
+	}
+	wantArgs := []string{"worker", "myapp", "--port", "8080"}
+	if !slices.Equal(gotArgs, wantArgs) {
+		t.Fatalf("install arguments = %q, want %q", gotArgs, wantArgs)
+	}
+}
+
+func TestStopTimeoutDefaultsToTenMinutes(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("the stop command timeout is specific to Windows")
+	}
+	app := newCommand()
+	stopCommand := app.Command("stop")
+	if stopCommand == nil {
+		t.Fatal("stop command not found")
+	}
+
+	var got time.Duration
+	stopCommand.Action = func(_ context.Context, command *cli.Command) error {
+		got = command.Duration("stop-timeout")
+		return nil
+	}
+	if err := app.Run(context.Background(), []string{"daemon-util", "stop", "worker"}); err != nil {
+		t.Fatal(err)
+	}
+	if got != daemon_util.DefaultStopTimeout {
+		t.Fatalf("stop timeout = %v, want %v", got, daemon_util.DefaultStopTimeout)
 	}
 }
 

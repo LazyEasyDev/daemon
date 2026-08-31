@@ -11,6 +11,7 @@ This configurable HTTP server verifies that `daemon` preserves application argum
 | `--count` | Integer | `1` |
 | `--port` | Integer | `18080` |
 | `--stop-after` | Duration | `0` (disabled) |
+| `--stop_delay` | Duration | `0` (disabled) |
 
 Use `--enabled=true` or `--enabled=false` for the Boolean option. Quote string values that contain spaces. Durations use Go syntax, such as `30s`, `2m`, or `1m30s`.
 
@@ -30,6 +31,14 @@ curl http://127.0.0.1:18080/
 Query the endpoint once before the timeout and again after the service manager's restart delay. A new `pid` and `started_at` confirm that the process restarted. The timer applies after every launch, so the process continues cycling until the service is stopped or reinstalled without `--stop-after`.
 
 The application also writes its start time to the service log in RFC3339 format whenever it launches.
+
+To test graceful-stop timeout handling, install the app with `--stop_delay`. When it receives SIGTERM or the equivalent Windows service stop request, it waits for that duration before shutting down:
+
+```sh
+"$daemon_bin" install --stop-timeout 10s test-app "$app_bin" --port 18080 --stop_delay 30s
+```
+
+With these values, service managers that enforce `--stop-timeout` should force termination after 10 seconds. The `--stop-after` failure timer does not apply `--stop_delay`.
 
 ## Run directly
 

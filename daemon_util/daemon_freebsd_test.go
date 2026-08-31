@@ -3,14 +3,45 @@
 package daemon_util
 
 import (
+	"bytes"
 	"strings"
 	"testing"
+	"text/template"
 )
+
+func renderFreeBSDConfig(t *testing.T, stopTimeoutSeconds int64) string {
+	t.Helper()
+	data := struct {
+		Name, RCName, RCVar, Description, Path, Args string
+		StopTimeoutSeconds                           int64
+	}{"worker", "worker", "worker_enable", "worker", "/opt/worker", "", stopTimeoutSeconds}
+	tpl, err := template.New("bsdConfig").Funcs(template.FuncMap{"shellQuote": shellQuote}).Parse(defaultBSDConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := tpl.Execute(&output, data); err != nil {
+		t.Fatal(err)
+	}
+	return output.String()
+}
+
+func requireOrdered(t *testing.T, source string, fragments ...string) {
+	t.Helper()
+	remaining := source
+	for _, fragment := range fragments {
+		index := strings.Index(remaining, fragment)
+		if index < 0 {
+			t.Fatalf("rendered template does not contain %q in the required order", fragment)
+		}
+		remaining = remaining[index+len(fragment):]
+	}
+}
 
 func TestFreeBSDRespawnsWithoutRetryLimit(t *testing.T) {
 	for _, setting := range []string{
 		`command="/usr/sbin/daemon"`,
-		`"$command" -R 30 -P "$pidfile" -f "$app_command"`,
+		`"$command" -R 30 -P "$pidfile" -p "$child_pidfile" -f "$app_command"`,
 	} {
 		if !strings.Contains(defaultBSDConfig, setting) {
 			t.Fatalf("FreeBSD config does not contain %q", setting)
@@ -19,4 +50,50 @@ func TestFreeBSDRespawnsWithoutRetryLimit(t *testing.T) {
 	if strings.Contains(defaultBSDConfig, `/usr/sbin/daemon -p "$pidfile"`) {
 		t.Fatal("FreeBSD config still tracks the child PID instead of the supervisor PID")
 	}
+}
+
+func TestFreeBSDTemplateConfiguresStopTimeout(t *testing.T) {
+	output := renderFreeBSDConfig(t, 45)
+	for _, setting := range []string{
+		"stop_timeout=45",
+		"supervisor_pid=$rc_pid",
+		`child_pid=$(check_pidfile "$child_pidfile" "$app_command")`,
+		`kill -TERM "$supervisor_pid"`,
+		`kill -KILL "$child_pid"`,
+	} {
+		if !strings.Contains(output, setting) {
+			t.Fatalf("rendered template does not contain %q", setting)
+		}
+	}
+}
+
+func TestFreeBSDStopValidatesPIDsBeforeSignaling(t *testing.T) {
+	output := renderFreeBSDConfig(t, 45)
+	if strings.Contains(output, `supervisor_pid=$(cat "$pidfile")`) {
+		t.Fatal("stop command trusts the raw supervisor PID file instead of rc.subr validation")
+	}
+	if strings.Contains(output, `child_pid=$(cat "$child_pidfile")`) {
+		t.Fatal("stop command trusts the raw child PID file instead of rc.subr validation")
+	}
+	const childCheck = `child_pid=$(check_pidfile "$child_pidfile" "$app_command")`
+	if count := strings.Count(output, childCheck); count != 3 {
+		t.Fatalf("child PID validation count = %d, want 3", count)
+	}
+}
+
+func TestFreeBSDStopOrdersEscalationAndCleanup(t *testing.T) {
+	output := renderFreeBSDConfig(t, 45)
+	requireOrdered(t, output,
+		`kill -TERM "$supervisor_pid"`,
+		`if [ "$elapsed" -ge "$stop_timeout" ]; then`,
+		`child_pid=$(check_pidfile "$child_pidfile" "$app_command")`,
+		`kill -KILL "$child_pid"`,
+		`kill -KILL "$supervisor_pid"`,
+		`force_elapsed=0`,
+		`while [ "$force_elapsed" -lt 5 ]; do`,
+		`child_pid=$(check_pidfile "$child_pidfile" "$app_command")`,
+		`child_pid=$(check_pidfile "$child_pidfile" "$app_command")`,
+		`if kill -0 "$supervisor_pid" 2>/dev/null || [ -n "$child_pid" ]; then`,
+		`rm -f "$pidfile" "$child_pidfile"`,
+	)
 }

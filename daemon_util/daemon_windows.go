@@ -12,19 +12,18 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strconv"
 	"syscall"
 	"time"
 	"unsafe"
 
 	winapi "golang.org/x/sys/windows"
-	"golang.org/x/sys/windows/registry"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
 )
 
 // windowsRecord - standard record (struct) for windows version of daemon package
 type windowsRecord struct {
+	serviceConfig
 	name           string
 	description    string
 	dependencies   []string
@@ -306,7 +305,7 @@ func (windows *windowsRecord) Stop() (string, error) {
 		return stopAction + failed, getWindowsError(err)
 	}
 	defer s.Close()
-	if err := stopAndWait(s); err != nil {
+	if err := stopAndWait(s, windows.stopTimeoutDuration()); err != nil {
 		return stopAction + failed, getWindowsError(err)
 	}
 
@@ -322,7 +321,7 @@ type serviceController interface {
 	Control(svc.Cmd) (svc.Status, error)
 }
 
-func stopAndWait(service serviceController) error {
+func stopAndWait(service serviceController, timeout time.Duration) error {
 	status, err := service.Query()
 	if err != nil {
 		return err
@@ -336,7 +335,7 @@ func stopAndWait(service serviceController) error {
 		}
 	}
 
-	_, err = waitForServiceState(service, svc.Stopped, getStopTimeout()+100*time.Millisecond)
+	_, err = waitForServiceState(service, svc.Stopped, timeout+100*time.Millisecond)
 	return err
 }
 
@@ -367,25 +366,6 @@ func waitForServiceState(service serviceStatusQuerier, target svc.State, timeout
 			return status, fmt.Errorf("timed out waiting for service state %s", getWindowsServiceStateFromUint32(target))
 		}
 	}
-}
-
-func getStopTimeout() time.Duration {
-	// For default and paths see https://support.microsoft.com/en-us/kb/146092
-	defaultTimeout := time.Millisecond * 20000
-	key, err := registry.OpenKey(registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Control`, registry.READ)
-	if err != nil {
-		return defaultTimeout
-	}
-	defer key.Close()
-	sv, _, err := key.GetStringValue("WaitToKillServiceTimeout")
-	if err != nil {
-		return defaultTimeout
-	}
-	v, err := strconv.Atoi(sv)
-	if err != nil {
-		return defaultTimeout
-	}
-	return time.Millisecond * time.Duration(v)
 }
 
 // Status - Get service status

@@ -27,6 +27,7 @@ type config struct {
 	Count     int           `json:"count"`
 	Port      int           `json:"port"`
 	StopAfter time.Duration `json:"stop_after"`
+	StopDelay time.Duration `json:"stop_delay"`
 }
 
 var errStopAfter = errors.New("configured stop-after elapsed")
@@ -61,6 +62,7 @@ func parseConfig(args []string) (config, error) {
 	flags.IntVar(&cfg.Count, "count", 1, "sample integer value")
 	flags.IntVar(&cfg.Port, "port", 18080, "HTTP listen port")
 	flags.DurationVar(&cfg.StopAfter, "stop-after", 0, "stop with a failure after this duration")
+	flags.DurationVar(&cfg.StopDelay, "stop_delay", 0, "delay graceful shutdown after a stop request")
 	if err := flags.Parse(args); err != nil {
 		return config{}, err
 	}
@@ -72,6 +74,9 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.StopAfter < 0 {
 		return config{}, fmt.Errorf("stop-after must not be negative")
+	}
+	if cfg.StopDelay < 0 {
+		return config{}, fmt.Errorf("stop_delay must not be negative")
 	}
 	return cfg, nil
 }
@@ -146,12 +151,20 @@ func (app *application) start() error {
 
 func (app *application) Stop() {
 	app.stopOnce.Do(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := app.server.Shutdown(ctx); err != nil {
-			log.Printf("stop HTTP server: %v", err)
+		if app.config.StopDelay > 0 {
+			log.Printf("delaying graceful stop for %s", app.config.StopDelay)
+			time.Sleep(app.config.StopDelay)
 		}
+		app.shutdown()
 	})
+}
+
+func (app *application) shutdown() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := app.server.Shutdown(ctx); err != nil {
+		log.Printf("stop HTTP server: %v", err)
+	}
 }
 
 func (app *application) Run() {
@@ -182,7 +195,7 @@ func (app *application) run() error {
 		app.Stop()
 		return nil
 	case <-stopTimer:
-		app.Stop()
+		app.shutdown()
 		return fmt.Errorf("%w: %s", errStopAfter, app.config.StopAfter)
 	case err := <-app.serveErr:
 		return fmt.Errorf("HTTP server failed: %w", err)

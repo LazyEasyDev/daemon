@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 var (
@@ -13,7 +14,33 @@ var (
 	ErrInvalidKind           = errors.New("invalid daemon kind")
 	ErrInvalidExecutablePath = errors.New("invalid executable path")
 	ErrInvalidDependency     = errors.New("invalid dependency")
+	ErrInvalidStopTimeout    = errors.New("invalid stop timeout")
 )
+
+const DefaultStopTimeout = 600 * time.Second
+
+type serviceConfig struct {
+	stopTimeout time.Duration
+}
+
+func (config *serviceConfig) SetStopTimeout(timeout time.Duration) error {
+	if timeout <= 0 || timeout%time.Second != 0 {
+		return fmt.Errorf("%w: must be a positive whole number of seconds", ErrInvalidStopTimeout)
+	}
+	config.stopTimeout = timeout
+	return nil
+}
+
+func (config *serviceConfig) stopTimeoutDuration() time.Duration {
+	if config.stopTimeout == 0 {
+		return DefaultStopTimeout
+	}
+	return config.stopTimeout
+}
+
+func (config *serviceConfig) stopTimeoutSeconds() int64 {
+	return int64(config.stopTimeoutDuration() / time.Second)
+}
 
 const managedServicePrefix = "lz_lz_"
 
@@ -73,6 +100,20 @@ type Daemon interface {
 
 	// Run - run executable service
 	Run(e Executable) (string, error)
+}
+
+type stopTimeoutConfigurer interface {
+	SetStopTimeout(time.Duration) error
+}
+
+// ConfigureStopTimeout configures the maximum graceful stop duration when the
+// selected platform backend supports it.
+func ConfigureStopTimeout(daemon Daemon, timeout time.Duration) error {
+	configurer, ok := daemon.(stopTimeoutConfigurer)
+	if !ok {
+		return ErrInvalidStopTimeout
+	}
+	return configurer.SetStopTimeout(timeout)
 }
 
 // Executable interface defines controlling methods of executable service

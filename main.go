@@ -6,7 +6,17 @@ import (
 	"os"
 
 	"github.com/urfave/cli/v3"
+
+	"github.com/LazyEasyDev/daemon/daemon_util"
 )
+
+func stopTimeoutFlag() cli.Flag {
+	return &cli.DurationFlag{
+		Name:  "stop-timeout",
+		Usage: "maximum graceful stop duration before forced termination where supported",
+		Value: daemon_util.DefaultStopTimeout,
+	}
+}
 
 func newCommand() *cli.Command {
 	stopAfterInstallTarget := 2
@@ -20,6 +30,7 @@ func newCommand() *cli.Command {
 				Usage:        "install app as system service",
 				ArgsUsage:    "<service-name> <app-or-absolute-path> [app arguments...]",
 				StopOnNthArg: &stopAfterInstallTarget,
+				Flags:        installCommandFlags(),
 				Action:       install,
 			},
 			{
@@ -31,6 +42,7 @@ func newCommand() *cli.Command {
 			{
 				Name:   "remove",
 				Usage:  "remove app from system service",
+				Flags:  stopCommandFlags(),
 				Action: remove,
 			},
 			{
@@ -41,11 +53,13 @@ func newCommand() *cli.Command {
 			{
 				Name:   "stop",
 				Usage:  "stop app",
+				Flags:  stopCommandFlags(),
 				Action: stop,
 			},
 			{
 				Name:   "restart",
 				Usage:  "restart app",
+				Flags:  stopCommandFlags(),
 				Action: restart,
 			},
 			{

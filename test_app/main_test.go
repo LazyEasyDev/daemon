@@ -18,13 +18,20 @@ func TestParseConfig(t *testing.T) {
 		"--count", "7",
 		"--port", "18081",
 		"--stop-after", "30s",
+		"--stop_delay", "45s",
 	}
 	cfg, err := parseConfig(args)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.Enabled || cfg.Message != "hello service" || cfg.Count != 7 || cfg.Port != 18081 || cfg.StopAfter != 30*time.Second {
+	if !cfg.Enabled || cfg.Message != "hello service" || cfg.Count != 7 || cfg.Port != 18081 || cfg.StopAfter != 30*time.Second || cfg.StopDelay != 45*time.Second {
 		t.Fatalf("parsed config = %+v", cfg)
+	}
+}
+
+func TestParseConfigRejectsNegativeStopDelay(t *testing.T) {
+	if _, err := parseConfig([]string{"--stop_delay", "-1s"}); err == nil {
+		t.Fatal("parseConfig() accepted a negative stop delay")
 	}
 }
 
@@ -86,5 +93,19 @@ func TestApplicationStopsAfterConfiguredDuration(t *testing.T) {
 	app := newApplication(config{Port: 0, StopAfter: 10 * time.Millisecond}, nil, "/opt/test-app")
 	if err := app.run(); !errors.Is(err, errStopAfter) {
 		t.Fatalf("run() error = %v, want %v", err, errStopAfter)
+	}
+}
+
+func TestApplicationDelaysGracefulStop(t *testing.T) {
+	const stopDelay = 50 * time.Millisecond
+	app := newApplication(config{Port: 0, StopDelay: stopDelay}, nil, "/opt/test-app")
+	if err := app.start(); err != nil {
+		t.Fatal(err)
+	}
+
+	started := time.Now()
+	app.Stop()
+	if elapsed := time.Since(started); elapsed < stopDelay {
+		t.Fatalf("Stop() returned after %v, want at least %v", elapsed, stopDelay)
 	}
 }

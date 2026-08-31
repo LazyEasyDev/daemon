@@ -68,12 +68,13 @@ func install(_ context.Context, command *cli.Command) error {
 	if err != nil {
 		return err
 	}
-	service, err := configuredService(command, args[0], executablePath)
+	service, serviceArgs, err := configuredInstallService(command, args[0], executablePath)
 	if err != nil {
 		return err
 	}
 
-	result, err := service.Install(args[2:]...)
+	serviceArgs = append(serviceArgs, args[2:]...)
+	result, err := service.Install(serviceArgs...)
 	if err != nil {
 		return err
 	}

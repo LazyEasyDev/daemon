@@ -75,6 +75,12 @@ func resolveExecutablePath(name, configuredPath string) (string, error) {
 	return path, nil
 }
 
+// ValidateExecutablePath verifies that path identifies a native executable for
+// the current operating system.
+func ValidateExecutablePath(path string) error {
+	return validateExecutable(path)
+}
+
 type serviceDirectory struct {
 	path       string
 	filePrefix string

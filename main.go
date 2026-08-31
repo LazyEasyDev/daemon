@@ -20,54 +20,56 @@ func stopTimeoutFlag() cli.Flag {
 
 func newCommand() *cli.Command {
 	stopAfterInstallTarget := 2
+	commands := []*cli.Command{
+		{
+			Name:         "install",
+			Usage:        "install app as system service",
+			ArgsUsage:    "<service-name> <app-or-absolute-path> [app arguments...]",
+			StopOnNthArg: &stopAfterInstallTarget,
+			Flags:        installCommandFlags(),
+			Action:       install,
+		},
+		{
+			Name:    "list",
+			Aliases: []string{"ls"},
+			Usage:   "list services installed by this tool",
+			Action:  list,
+		},
+		{
+			Name:   "remove",
+			Usage:  "remove app from system service",
+			Flags:  stopCommandFlags(),
+			Action: remove,
+		},
+		{
+			Name:   "start",
+			Usage:  "start app",
+			Action: start,
+		},
+		{
+			Name:   "stop",
+			Usage:  "stop app",
+			Flags:  stopCommandFlags(),
+			Action: stop,
+		},
+		{
+			Name:   "restart",
+			Usage:  "restart app",
+			Flags:  stopCommandFlags(),
+			Action: restart,
+		},
+		{
+			Name:   "status",
+			Usage:  "show app status",
+			Action: status,
+		},
+	}
+	commands = append(commands, platformCommands()...)
 
 	return &cli.Command{
-		Name:  "daemon-util",
-		Usage: "run app as system service",
-		Commands: []*cli.Command{
-			{
-				Name:         "install",
-				Usage:        "install app as system service",
-				ArgsUsage:    "<service-name> <app-or-absolute-path> [app arguments...]",
-				StopOnNthArg: &stopAfterInstallTarget,
-				Flags:        installCommandFlags(),
-				Action:       install,
-			},
-			{
-				Name:    "list",
-				Aliases: []string{"ls"},
-				Usage:   "list services installed by this tool",
-				Action:  list,
-			},
-			{
-				Name:   "remove",
-				Usage:  "remove app from system service",
-				Flags:  stopCommandFlags(),
-				Action: remove,
-			},
-			{
-				Name:   "start",
-				Usage:  "start app",
-				Action: start,
-			},
-			{
-				Name:   "stop",
-				Usage:  "stop app",
-				Flags:  stopCommandFlags(),
-				Action: stop,
-			},
-			{
-				Name:   "restart",
-				Usage:  "restart app",
-				Flags:  stopCommandFlags(),
-				Action: restart,
-			},
-			{
-				Name:   "status",
-				Usage:  "show app status",
-				Action: status,
-			},
-		},
+		Name:     "daemon-util",
+		Usage:    "run app as system service",
+		Commands: commands,
 	}
 }
 

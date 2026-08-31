@@ -41,8 +41,6 @@ type windowsPreshutdownInfo struct {
 }
 
 const (
-	windowsPendingUpdateInterval = time.Second
-	windowsPendingWaitHint       = 10 * time.Second
 	maxWindowsPreshutdownTimeout = time.Duration(1<<32-1) * time.Millisecond
 )
 
@@ -488,97 +486,6 @@ func windowsServiceStatus(state svc.State) string {
 	default:
 		return "unknown"
 	}
-}
-
-type serviceHandler struct {
-	executable            Executable
-	pendingUpdateInterval time.Duration
-}
-
-func (sh *serviceHandler) updateInterval() time.Duration {
-	if sh.pendingUpdateInterval > 0 {
-		return sh.pendingUpdateInterval
-	}
-	return windowsPendingUpdateInterval
-}
-
-func runWindowsPendingOperation(changes chan<- svc.Status, state svc.State, operation func(), updateInterval time.Duration) {
-	checkpoint := uint32(1)
-	pendingStatus := func() svc.Status {
-		return svc.Status{
-			State:      state,
-			CheckPoint: checkpoint,
-			WaitHint:   uint32(windowsPendingWaitHint / time.Millisecond),
-		}
-	}
-	changes <- pendingStatus()
-
-	done := make(chan struct{})
-	go func() {
-		operation()
-		close(done)
-	}()
-
-	ticker := time.NewTicker(updateInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-done:
-			return
-		case <-ticker.C:
-			checkpoint++
-			changes <- pendingStatus()
-		}
-	}
-}
-
-func (sh *serviceHandler) Execute(_ []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32) {
-	const cmdsAccepted = svc.AcceptStop | svc.AcceptShutdown | svc.AcceptPreShutdown
-
-	runWindowsPendingOperation(changes, svc.StartPending, sh.executable.Start, sh.updateInterval())
-	changes <- svc.Status{State: svc.Running, Accepts: cmdsAccepted}
-
-loop:
-	for {
-		request := <-r
-		switch request.Cmd {
-		case svc.Interrogate:
-			changes <- request.CurrentStatus
-			// Testing deadlock from https://code.google.com/p/winsvc/issues/detail?id=4
-			time.Sleep(100 * time.Millisecond)
-			changes <- request.CurrentStatus
-		case svc.Stop, svc.Shutdown, svc.PreShutdown:
-			runWindowsPendingOperation(changes, svc.StopPending, sh.executable.Stop, sh.updateInterval())
-			break loop
-		}
-	}
-	return false, 0
-}
-
-func (windows *windowsRecord) Run(e Executable) (string, error) {
-	runAction := "Running " + windows.description + ":"
-
-	isService, err := svc.IsWindowsService()
-	if err != nil {
-		return runAction + failed, getWindowsError(err)
-	}
-	if isService {
-		serviceName, err := currentWindowsServiceName()
-		if err != nil {
-			return runAction + failed, err
-		}
-		err = svc.Run(serviceName, &serviceHandler{
-			executable: e,
-		})
-		if err != nil {
-			return runAction + failed, getWindowsError(err)
-		}
-	} else {
-		// otherwise, service was called outside the service manager
-		e.Run()
-	}
-
-	return runAction + " completed.", nil
 }
 
 // GetTemplate - gets service config template

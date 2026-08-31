@@ -2,12 +2,24 @@
 
 package main
 
-import "github.com/urfave/cli/v3"
+import (
+	"github.com/LazyEasyDev/daemon/daemon_util"
+	"github.com/urfave/cli/v3"
+)
 
 func installCommandFlags() []cli.Flag {
 	return []cli.Flag{stopTimeoutFlag()}
 }
 
 func stopCommandFlags() []cli.Flag {
+	return nil
+}
+
+func configuredInstallService(command *cli.Command, serviceName, executablePath string) (daemon_util.Daemon, []string, error) {
+	service, err := configuredService(command, serviceName, executablePath)
+	return service, nil, err
+}
+
+func platformCommands() []*cli.Command {
 	return nil
 }

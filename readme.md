@@ -18,7 +18,7 @@ daemon-linux-arm32<br />
 
 ## Architecture
 
-`daemon-util` is a management CLI, not a long-running supervisor. It registers each application as an independent service with the platform's native service system, then exits. Lifecycle operations are delegated to systemd, OpenRC, OpenWrt procd, Upstart, System V or Buildroot init, FreeBSD rc.d, launchd, or Windows SCM. FreeBSD uses a separate `/usr/sbin/daemon` supervisor for each installed service.
+`daemon-util` is a management CLI, not a shared long-running supervisor. It registers each application as an independent service with the platform's native service system, then exits. Lifecycle operations are delegated to systemd, OpenRC, OpenWrt procd, Upstart, System V or Buildroot init, FreeBSD rc.d, launchd, or Windows SCM. FreeBSD uses a separate `/usr/sbin/daemon` supervisor for each installed service. On Windows, ordinary applications use a separate `daemon-util` wrapper process for each service.
 
 We considered using one shared background process to supervise every installed application, but rejected that design for the following reasons:
 
@@ -54,7 +54,7 @@ The service name is explicit and independent from the executable filename. It mu
 
 The application path must resolve to a native executable for the current operating system. Symbolic links are supported. On Linux, FreeBSD, and macOS, run a script by installing its native interpreter as the application and passing the script path as the first argument, for example `sudo ./daemon install myservice /bin/sh /opt/myservice.sh`. The executable or interpreter must remain in the foreground for the service lifetime.
 
-On Windows, the native executable must implement the Windows service protocol, for example by running the application through this package's `Daemon.Run` method. A generic interpreter such as `python.exe` is not itself a Windows service executable.
+On Windows, ordinary third-party executables are supported by default and do not need to implement the Windows SCM protocol. Use `--windows-native-service` only when the target already implements that protocol, for example by running through this package's `Daemon.Run` method.
 
 
 ### Linux and FreeBSD
@@ -101,6 +101,7 @@ cd C:\path\to\your-project-folder
 
 .\daemon.exe install myservice .\myapp.exe [arg1] [arg2] ...
 .\daemon.exe install --stop-timeout 5m myservice .\myapp.exe [arg1] [arg2] ...
+.\daemon.exe install --windows-native-service myservice .\scm-aware-app.exe [arg1] [arg2] ...
 .\daemon.exe list
 .\daemon.exe start myservice
 .\daemon.exe status myservice
@@ -109,6 +110,8 @@ cd C:\path\to\your-project-folder
 .\daemon.exe stop --stop-timeout 45s myservice
 .\daemon.exe remove myservice
 ```
+
+In the default mode, SCM runs `daemon.exe`, which starts the application in its executable directory and reports application startup or runtime failures to SCM. Stopping the service terminates the application process. Applications that need custom graceful shutdown handling should implement the SCM protocol and be installed with `--windows-native-service`.
 
 `--stop-timeout` defaults to `600s` and accepts positive, whole-second Go duration values such as `45s` or `10m`. On Unix platforms, set it during `install` so the generated service configuration waits up to that duration before forcing termination. On Windows, the install value configures how long SCM allows the service to finish preshutdown cleanup during an operating-system shutdown or reboot. The option must appear before the executable because arguments after the executable belong to the application.
 

@@ -24,6 +24,10 @@ type fakeWindowsExecutable struct {
 	stop func()
 }
 
+type completingWindowsExecutable struct {
+	done chan error
+}
+
 func (*fakeWindowsExecutable) Start() {}
 
 func (executable *fakeWindowsExecutable) Stop() {
@@ -31,6 +35,16 @@ func (executable *fakeWindowsExecutable) Stop() {
 }
 
 func (*fakeWindowsExecutable) Run() {}
+
+func (*completingWindowsExecutable) Start() {}
+
+func (*completingWindowsExecutable) Stop() {}
+
+func (*completingWindowsExecutable) Run() {}
+
+func (executable *completingWindowsExecutable) Done() <-chan error {
+	return executable.done
+}
 
 func (service *fakeWindowsService) Query() (svc.Status, error) {
 	status := service.statuses[0]
@@ -162,6 +176,32 @@ func TestServiceHandlerReportsPreshutdownProgress(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("service handler did not finish after preshutdown")
+	}
+}
+
+func TestServiceHandlerReportsChildFailure(t *testing.T) {
+	executable := &completingWindowsExecutable{done: make(chan error, 1)}
+	handler := &serviceHandler{executable: executable}
+	requests := make(chan svc.ChangeRequest)
+	changes := make(chan svc.Status, 2)
+	result := make(chan struct {
+		specific bool
+		code     uint32
+	}, 1)
+	go func() {
+		specific, code := handler.Execute(nil, requests, changes)
+		result <- struct {
+			specific bool
+			code     uint32
+		}{specific: specific, code: code}
+	}()
+
+	<-changes
+	<-changes
+	executable.done <- errors.New("child failed")
+	got := <-result
+	if !got.specific || got.code == 0 {
+		t.Fatalf("service result = (%t, %d), want a nonzero service-specific failure", got.specific, got.code)
 	}
 }
 

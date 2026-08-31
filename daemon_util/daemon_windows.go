@@ -36,6 +36,16 @@ type windowsService struct {
 	state     svc.State
 }
 
+type windowsPreshutdownInfo struct {
+	timeoutMilliseconds uint32
+}
+
+const (
+	windowsPendingUpdateInterval = time.Second
+	windowsPendingWaitHint       = 10 * time.Second
+	maxWindowsPreshutdownTimeout = time.Duration(1<<32-1) * time.Millisecond
+)
+
 func newDaemon(name, description string, _ Kind, dependencies []string, executablePath string) (Daemon, error) {
 
 	return &windowsRecord{
@@ -64,6 +74,26 @@ func openWindowsService(manager *mgr.Mgr, name string, access uint32) (*mgr.Serv
 		return nil, err
 	}
 	return &mgr.Service{Name: name, Handle: handle}, nil
+}
+
+func windowsPreshutdownTimeoutMilliseconds(timeout time.Duration) (uint32, error) {
+	if timeout < time.Millisecond || timeout > maxWindowsPreshutdownTimeout {
+		return 0, fmt.Errorf("%w: exceeds the Windows preshutdown limit", ErrInvalidStopTimeout)
+	}
+	return uint32(timeout / time.Millisecond), nil
+}
+
+func setWindowsPreshutdownTimeout(service *mgr.Service, timeout time.Duration) error {
+	timeoutMilliseconds, err := windowsPreshutdownTimeoutMilliseconds(timeout)
+	if err != nil {
+		return err
+	}
+	info := windowsPreshutdownInfo{timeoutMilliseconds: timeoutMilliseconds}
+	return winapi.ChangeServiceConfig2(
+		service.Handle,
+		winapi.SERVICE_CONFIG_PRESHUTDOWN_INFO,
+		(*byte)(unsafe.Pointer(&info)),
+	)
 }
 
 // ListServices returns user-facing names of services registered by this tool.
@@ -226,6 +256,16 @@ func (windows *windowsRecord) Install(args ...string) (string, error) {
 			)
 		}
 		return installAction + failed, recoveryErr
+	}
+	if err := setWindowsPreshutdownTimeout(s, windows.stopTimeoutDuration()); err != nil {
+		preshutdownErr := getWindowsError(err)
+		if rollbackErr := s.Delete(); rollbackErr != nil {
+			return installAction + failed, errors.Join(
+				preshutdownErr,
+				fmt.Errorf("rollback service creation: %w", getWindowsError(rollbackErr)),
+			)
+		}
+		return installAction + failed, preshutdownErr
 	}
 
 	return installAction + " completed.", nil
@@ -451,14 +491,51 @@ func windowsServiceStatus(state svc.State) string {
 }
 
 type serviceHandler struct {
-	executable Executable
+	executable            Executable
+	pendingUpdateInterval time.Duration
+}
+
+func (sh *serviceHandler) updateInterval() time.Duration {
+	if sh.pendingUpdateInterval > 0 {
+		return sh.pendingUpdateInterval
+	}
+	return windowsPendingUpdateInterval
+}
+
+func runWindowsPendingOperation(changes chan<- svc.Status, state svc.State, operation func(), updateInterval time.Duration) {
+	checkpoint := uint32(1)
+	pendingStatus := func() svc.Status {
+		return svc.Status{
+			State:      state,
+			CheckPoint: checkpoint,
+			WaitHint:   uint32(windowsPendingWaitHint / time.Millisecond),
+		}
+	}
+	changes <- pendingStatus()
+
+	done := make(chan struct{})
+	go func() {
+		operation()
+		close(done)
+	}()
+
+	ticker := time.NewTicker(updateInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+			checkpoint++
+			changes <- pendingStatus()
+		}
+	}
 }
 
 func (sh *serviceHandler) Execute(_ []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32) {
-	const cmdsAccepted = svc.AcceptStop | svc.AcceptShutdown
-	changes <- svc.Status{State: svc.StartPending}
+	const cmdsAccepted = svc.AcceptStop | svc.AcceptShutdown | svc.AcceptPreShutdown
 
-	sh.executable.Start()
+	runWindowsPendingOperation(changes, svc.StartPending, sh.executable.Start, sh.updateInterval())
 	changes <- svc.Status{State: svc.Running, Accepts: cmdsAccepted}
 
 loop:
@@ -470,9 +547,8 @@ loop:
 			// Testing deadlock from https://code.google.com/p/winsvc/issues/detail?id=4
 			time.Sleep(100 * time.Millisecond)
 			changes <- request.CurrentStatus
-		case svc.Stop, svc.Shutdown:
-			changes <- svc.Status{State: svc.StopPending}
-			sh.executable.Stop()
+		case svc.Stop, svc.Shutdown, svc.PreShutdown:
+			runWindowsPendingOperation(changes, svc.StopPending, sh.executable.Stop, sh.updateInterval())
 			break loop
 		}
 	}

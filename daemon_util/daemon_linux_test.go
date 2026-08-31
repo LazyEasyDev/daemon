@@ -180,6 +180,30 @@ func TestSystemVValidatesProcessBeforeSignals(t *testing.T) {
 	}
 }
 
+func TestSystemVStatusDoesNotRequireRedHatHelpers(t *testing.T) {
+	for _, setting := range []string{
+		`service_status() {`,
+		`printf '%s (pid  %s) is running...\n' "$proc" "$pid"`,
+		`service_status >/dev/null 2>&1 && exit 0`,
+		`service_status >/dev/null 2>&1 || exit 0`,
+	} {
+		if !strings.Contains(defaultSystemVConfig, setting) {
+			t.Fatalf("System V config does not contain %q", setting)
+		}
+	}
+	for _, dependency := range []string{
+		`/etc/rc.d/init.d/functions`,
+		`status -p $pidfile $proc`,
+		"\tsuccess\n",
+		"\tfailure\n",
+		`$"`,
+	} {
+		if strings.Contains(defaultSystemVConfig, dependency) {
+			t.Fatalf("System V config still depends on %q", dependency)
+		}
+	}
+}
+
 func TestSystemVDetected(t *testing.T) {
 	tests := []struct {
 		name     string

@@ -38,7 +38,7 @@ To test graceful-stop timeout handling, install the app with `--stop_delay`. Whe
 "$daemon_bin" install --stop-timeout 10s testapp "$app_bin" --port 18080 --stop_delay 30s
 ```
 
-With these values, service managers that enforce `--stop-timeout` should force termination after 10 seconds. The `--stop-after` failure timer does not apply `--stop_delay`.
+With these values, Unix service managers that enforce `--stop-timeout` should force termination after 10 seconds. On Windows, the install value gives preshutdown cleanup 10 seconds during an operating-system shutdown or reboot; manual stop commands do not force termination. The `--stop-after` failure timer does not apply `--stop_delay`.
 
 ## Run directly
 

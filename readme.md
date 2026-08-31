@@ -100,6 +100,7 @@ Open PowerShell with **Run as administrator**, then run:
 cd C:\path\to\your-project-folder
 
 .\daemon.exe install myservice .\myapp.exe [arg1] [arg2] ...
+.\daemon.exe install --stop-timeout 5m myservice .\myapp.exe [arg1] [arg2] ...
 .\daemon.exe list
 .\daemon.exe start myservice
 .\daemon.exe status myservice
@@ -109,9 +110,9 @@ cd C:\path\to\your-project-folder
 .\daemon.exe remove myservice
 ```
 
-`--stop-timeout` defaults to `600s` and accepts positive, whole-second Go duration values such as `45s` or `10m`. On Unix platforms, set it during `install` so the generated service configuration waits up to that duration before forcing termination. The option must appear before the executable because arguments after the executable belong to the application.
+`--stop-timeout` defaults to `600s` and accepts positive, whole-second Go duration values such as `45s` or `10m`. On Unix platforms, set it during `install` so the generated service configuration waits up to that duration before forcing termination. On Windows, the install value configures how long SCM allows the service to finish preshutdown cleanup during an operating-system shutdown or reboot. The option must appear before the executable because arguments after the executable belong to the application.
 
-On Windows, `--stop-timeout` on `stop`, `restart`, or `remove` controls only how long this tool waits for SCM to report `STOPPED`. A timeout returns an error and does not terminate the service process.
+On Windows, `--stop-timeout` on `stop`, `restart`, or `remove` separately controls how long this tool waits for SCM to report `STOPPED`. A timeout from one of these commands returns an error and does not terminate the service process.
 
 `list` and `ls` show each managed service and its current status:
 

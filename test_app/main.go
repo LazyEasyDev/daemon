@@ -53,6 +53,7 @@ type application struct {
 	startMu         sync.Mutex
 	started         bool
 	stopAfterOnce   sync.Once
+	stopAfterResult sync.Once
 	stopOnce        sync.Once
 }
 
@@ -146,12 +147,23 @@ func (app *application) startStopAfterTimer() {
 			defer timer.Stop()
 			select {
 			case <-timer.C:
-				app.shutdown()
-				app.fatal(fmt.Errorf("%w: %s", errStopAfter, app.config.StopAfter))
+				app.handleStopAfterElapsed()
 			case <-app.stopAfterCancel:
 			}
 		}()
 	})
+}
+
+func (app *application) handleStopAfterElapsed() {
+	elapsed := false
+	app.stopAfterResult.Do(func() {
+		elapsed = true
+	})
+	if !elapsed {
+		return
+	}
+	app.shutdown()
+	app.fatal(fmt.Errorf("%w: %s", errStopAfter, app.config.StopAfter))
 }
 
 func (app *application) start() error {
@@ -177,7 +189,9 @@ func (app *application) start() error {
 
 func (app *application) Stop() {
 	app.stopOnce.Do(func() {
-		close(app.stopAfterCancel)
+		app.stopAfterResult.Do(func() {
+			close(app.stopAfterCancel)
+		})
 		if app.config.StopDelay > 0 {
 			log.Printf("delaying graceful stop for %s", app.config.StopDelay)
 			time.Sleep(app.config.StopDelay)

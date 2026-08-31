@@ -20,6 +20,18 @@ type fakeWindowsService struct {
 	controlErr   error
 }
 
+type fakeWindowsExecutable struct {
+	stop func()
+}
+
+func (*fakeWindowsExecutable) Start() {}
+
+func (executable *fakeWindowsExecutable) Stop() {
+	executable.stop()
+}
+
+func (*fakeWindowsExecutable) Run() {}
+
 func (service *fakeWindowsService) Query() (svc.Status, error) {
 	status := service.statuses[0]
 	if len(service.statuses) > 1 {
@@ -83,6 +95,73 @@ func TestStopAndWaitUsesConfiguredTimeoutWithoutKilling(t *testing.T) {
 	}
 	if service.controlCalls != 1 {
 		t.Fatalf("Control calls = %d, want 1", service.controlCalls)
+	}
+}
+
+func TestWindowsPreshutdownTimeoutMilliseconds(t *testing.T) {
+	got, err := windowsPreshutdownTimeoutMilliseconds(3 * time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 180000 {
+		t.Fatalf("timeout = %d ms, want 180000 ms", got)
+	}
+
+	_, err = windowsPreshutdownTimeoutMilliseconds(time.Nanosecond)
+	if !errors.Is(err, ErrInvalidStopTimeout) {
+		t.Fatalf("sub-millisecond error = %v, want %v", err, ErrInvalidStopTimeout)
+	}
+
+	_, err = windowsPreshutdownTimeoutMilliseconds(maxWindowsPreshutdownTimeout + time.Millisecond)
+	if !errors.Is(err, ErrInvalidStopTimeout) {
+		t.Fatalf("overflow error = %v, want %v", err, ErrInvalidStopTimeout)
+	}
+}
+
+func TestServiceHandlerReportsPreshutdownProgress(t *testing.T) {
+	stopStarted := make(chan struct{})
+	finishStop := make(chan struct{})
+	executable := &fakeWindowsExecutable{stop: func() {
+		close(stopStarted)
+		<-finishStop
+	}}
+	handler := &serviceHandler{
+		executable:            executable,
+		pendingUpdateInterval: time.Millisecond,
+	}
+	requests := make(chan svc.ChangeRequest, 1)
+	changes := make(chan svc.Status, 8)
+	done := make(chan struct{})
+	go func() {
+		handler.Execute(nil, requests, changes)
+		close(done)
+	}()
+
+	startPending := <-changes
+	if startPending.State != svc.StartPending || startPending.CheckPoint != 1 || startPending.WaitHint == 0 {
+		t.Fatalf("start pending status = %+v", startPending)
+	}
+	running := <-changes
+	if running.State != svc.Running || running.Accepts&svc.AcceptPreShutdown == 0 {
+		t.Fatalf("running status = %+v, want preshutdown accepted", running)
+	}
+
+	requests <- svc.ChangeRequest{Cmd: svc.PreShutdown}
+	<-stopStarted
+	firstStopPending := <-changes
+	secondStopPending := <-changes
+	if firstStopPending.State != svc.StopPending || firstStopPending.CheckPoint != 1 || firstStopPending.WaitHint == 0 {
+		t.Fatalf("first stop pending status = %+v", firstStopPending)
+	}
+	if secondStopPending.State != svc.StopPending || secondStopPending.CheckPoint <= firstStopPending.CheckPoint {
+		t.Fatalf("second stop pending status = %+v, want checkpoint after %d", secondStopPending, firstStopPending.CheckPoint)
+	}
+
+	close(finishStop)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("service handler did not finish after preshutdown")
 	}
 }
 

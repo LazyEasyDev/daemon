@@ -234,13 +234,6 @@ const defaultSystemVConfig = `#! /bin/sh
 # Description: {{.Description}}
 ### END INIT INFO
 
-#
-# Source function library.
-#
-if [ -f /etc/rc.d/init.d/functions ]; then
-    . /etc/rc.d/init.d/functions
-fi
-
 exec={{shellQuote .Path}}
 servname={{shellQuote .Description}}
 
@@ -287,15 +280,13 @@ start() {
 		sleep 1
 		if is_expected_process; then
 			touch "$lockfile"
-			success
-			echo
+			echo "OK"
 		else
 			wait "$pid"
 			retval=$?
 			[ "$retval" -ne 0 ] || retval=1
 			rm -f "$pidfile" "$lockfile"
-			failure
-			echo
+			echo "FAIL"
 			return "$retval"
 		fi
 	else
@@ -307,26 +298,22 @@ start() {
 }
 
 stop() {
-	echo -n $"Stopping $servname: "
+	printf 'Stopping %s:\t' "$servname"
 	if ! read_pid; then
-		failure
-		echo
+		echo "FAIL"
 		return 1
 	fi
 	if ! kill -0 "$pid" 2>/dev/null; then
 		rm -f "$pidfile" "$lockfile"
-		success
-		echo
+		echo "OK"
 		return 0
 	fi
 	if ! is_expected_process; then
-		failure
-		echo
+		echo "FAIL"
 		return 1
 	fi
 	if ! kill -TERM "$pid" 2>/dev/null; then
-		failure
-		echo
+		echo "FAIL"
 		return 1
 	fi
 
@@ -336,8 +323,7 @@ stop() {
 		elapsed=$((elapsed + 1))
 	done
 	if is_expected_process && ! kill -KILL "$pid" 2>/dev/null; then
-		failure
-		echo
+		echo "FAIL"
 		return 1
 	fi
 	force_elapsed=0
@@ -346,13 +332,11 @@ stop() {
 		force_elapsed=$((force_elapsed + 1))
 	done
 	if is_expected_process || kill -0 "$pid" 2>/dev/null; then
-		failure
-		echo
+		echo "FAIL"
 		return 1
 	fi
 	rm -f "$pidfile" "$lockfile"
-	success
-	echo
+	echo "OK"
 	return 0
 }
 
@@ -360,32 +344,33 @@ restart() {
 	stop && start
 }
 
-rh_status() {
-    status -p $pidfile $proc
-}
-
-rh_status_q() {
-    rh_status >/dev/null 2>&1
+service_status() {
+	if is_expected_process; then
+		printf '%s (pid  %s) is running...\n' "$proc" "$pid"
+		return 0
+	fi
+	printf '%s is stopped\n' "$proc"
+	return 3
 }
 
 case "$1" in
-    start)
-        rh_status_q && exit 0
-        $1
-        ;;
-    stop)
-        rh_status_q || exit 0
-        $1
-        ;;
-    restart)
-        $1
-        ;;
-    status)
-        rh_status
-        ;;
-    *)
-        echo $"Usage: $0 {start|stop|status|restart}"
-        exit 2
+	start)
+		service_status >/dev/null 2>&1 && exit 0
+		start
+		;;
+	stop)
+		service_status >/dev/null 2>&1 || exit 0
+		stop
+		;;
+	restart)
+		restart
+		;;
+	status)
+		service_status
+		;;
+	*)
+		printf 'Usage: %s {start|stop|status|restart}\n' "$0"
+		exit 2
 esac
 
 exit $?

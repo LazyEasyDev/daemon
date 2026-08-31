@@ -71,9 +71,6 @@ func TestInstallCommandPreservesArgumentsAfterAbsolutePath(t *testing.T) {
 }
 
 func TestInstallCommandParsesStopTimeoutBeforeApplication(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Windows configures the wait timeout when stopping")
-	}
 	app := newCommand()
 	installCommand := app.Command("install")
 	if installCommand == nil {

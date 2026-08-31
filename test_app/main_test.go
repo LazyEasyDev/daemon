@@ -115,6 +115,23 @@ func TestApplicationStartStopsAfterConfiguredDuration(t *testing.T) {
 	}
 }
 
+func TestApplicationIntentionalStopWinsOverElapsedTimer(t *testing.T) {
+	app := newApplication(config{Port: 0, StopAfter: time.Second}, nil, "/opt/test-app")
+	fatalErr := make(chan error, 1)
+	app.fatal = func(err error) {
+		fatalErr <- err
+	}
+
+	app.Stop()
+	app.handleStopAfterElapsed()
+
+	select {
+	case err := <-fatalErr:
+		t.Fatalf("fatal called after intentional stop: %v", err)
+	default:
+	}
+}
+
 func TestApplicationDelaysGracefulStop(t *testing.T) {
 	const stopDelay = 50 * time.Millisecond
 	app := newApplication(config{Port: 0, StopDelay: stopDelay}, nil, "/opt/test-app")

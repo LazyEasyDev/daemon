@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -47,15 +48,31 @@ func ExecPath() (string, error) {
 	return os.Executable()
 }
 
-func resolveExecutablePath(name, configuredPath string) (string, error) {
-	if configuredPath != "" {
-		return configuredPath, nil
-	}
-	path, err := ExecPath()
+func readExecutableMagic(path string) ([4]byte, error) {
+	file, err := os.Open(path)
 	if err != nil {
+		return [4]byte{}, err
+	}
+	defer file.Close()
+
+	var magic [4]byte
+	_, err = io.ReadFull(file, magic[:])
+	return magic, err
+}
+
+func resolveExecutablePath(name, configuredPath string) (string, error) {
+	path := configuredPath
+	if path == "" {
+		executable, err := ExecPath()
+		if err != nil {
+			return "", err
+		}
+		path = filepath.Join(filepath.Dir(executable), name)
+	}
+	if err := validateExecutable(path); err != nil {
 		return "", err
 	}
-	return filepath.Join(filepath.Dir(path), name), nil
+	return path, nil
 }
 
 type serviceDirectory struct {
@@ -177,35 +194,6 @@ func shellQuote(value string) string {
 
 func shellQuoteArgs(args []string) string {
 	return quoteArgs(args, shellQuote)
-}
-
-func freeBSDRCName(name string) string {
-	valid := name != ""
-	for index, character := range name {
-		if character >= 'a' && character <= 'z' ||
-			character >= 'A' && character <= 'Z' ||
-			character == '_' ||
-			index > 0 && character >= '0' && character <= '9' {
-			continue
-		}
-		valid = false
-		break
-	}
-	if valid {
-		return name
-	}
-
-	var encoded strings.Builder
-	encoded.WriteString("daemon")
-	for _, character := range name {
-		encoded.WriteByte('_')
-		encoded.WriteString(strconv.FormatInt(int64(character), 16))
-	}
-	return encoded.String()
-}
-
-func freeBSDRCVar(name string) string {
-	return freeBSDRCName(name) + "_enable"
 }
 
 func systemdQuote(value string) string {

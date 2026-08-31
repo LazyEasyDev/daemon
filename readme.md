@@ -50,7 +50,11 @@ This choice intentionally favors native reliability and failure isolation over i
 │  └─daemon    //daemon file compiled and copy from this package
 ```
 
-The service name is explicit and independent from the executable filename. It may contain `A-Z`, `a-z`, `0-9`, `.`, `_`, `@`, and `-`. A relative executable name is resolved beside the daemon binary. An executable in another folder can be installed using its absolute path.
+The service name is explicit and independent from the executable filename. It must start with an ASCII letter, contain only ASCII letters and digits, and be at most 241 characters long. A relative executable name is resolved beside the daemon binary. An executable in another folder can be installed using its absolute path.
+
+The application path must resolve to a native executable for the current operating system. Symbolic links are supported. On Linux, FreeBSD, and macOS, run a script by installing its native interpreter as the application and passing the script path as the first argument, for example `sudo ./daemon install myservice /bin/sh /opt/myservice.sh`. The executable or interpreter must remain in the foreground for the service lifetime.
+
+On Windows, the native executable must implement the Windows service protocol, for example by running the application through this package's `Daemon.Run` method. A generic interpreter such as `python.exe` is not itself a Windows service executable.
 
 
 ### Linux and FreeBSD
@@ -58,17 +62,17 @@ The service name is explicit and independent from the executable filename. It ma
 ```sh
 cd ./{your-project-folder}
 
-sudo ./daemon install my-service myapp [arg1] [arg2] ...
-sudo ./daemon install --stop-timeout 45s my-service myapp [arg1] [arg2] ...
-sudo ./daemon install my-service myapp --port 8080 --config "configs/my app.toml"
-sudo ./daemon install my-service "/opt/My App/myapp" --port 8080 --config "/opt/My App/config.toml"
+sudo ./daemon install myservice myapp [arg1] [arg2] ...
+sudo ./daemon install --stop-timeout 45s myservice myapp [arg1] [arg2] ...
+sudo ./daemon install myservice myapp --port 8080 --config "configs/my app.toml"
+sudo ./daemon install myservice "/opt/My App/myapp" --port 8080 --config "/opt/My App/config.toml"
 sudo ./daemon list
 sudo ./daemon ls
-sudo ./daemon start my-service
-sudo ./daemon status my-service
-sudo ./daemon restart my-service
-sudo ./daemon stop my-service
-sudo ./daemon remove my-service
+sudo ./daemon start myservice
+sudo ./daemon status myservice
+sudo ./daemon restart myservice
+sudo ./daemon stop myservice
+sudo ./daemon remove myservice
 ```
 
 ### macOS
@@ -78,14 +82,14 @@ Do not use `sudo`; it would create the per-user LaunchAgent for the root user in
 ```sh
 cd ./{your-project-folder}
 
-./daemon install my-service myapp [arg1] [arg2] ...
-./daemon install --stop-timeout 45s my-service myapp [arg1] [arg2] ...
+./daemon install myservice myapp [arg1] [arg2] ...
+./daemon install --stop-timeout 45s myservice myapp [arg1] [arg2] ...
 ./daemon list
-./daemon start my-service
-./daemon status my-service
-./daemon restart my-service
-./daemon stop my-service
-./daemon remove my-service
+./daemon start myservice
+./daemon status myservice
+./daemon restart myservice
+./daemon stop myservice
+./daemon remove myservice
 ```
 
 ### Windows PowerShell
@@ -95,14 +99,14 @@ Open PowerShell with **Run as administrator**, then run:
 ```powershell
 cd C:\path\to\your-project-folder
 
-.\daemon.exe install my-service .\myapp.exe [arg1] [arg2] ...
+.\daemon.exe install myservice .\myapp.exe [arg1] [arg2] ...
 .\daemon.exe list
-.\daemon.exe start my-service
-.\daemon.exe status my-service
-.\daemon.exe restart my-service
-.\daemon.exe stop my-service
-.\daemon.exe stop --stop-timeout 45s my-service
-.\daemon.exe remove my-service
+.\daemon.exe start myservice
+.\daemon.exe status myservice
+.\daemon.exe restart myservice
+.\daemon.exe stop myservice
+.\daemon.exe stop --stop-timeout 45s myservice
+.\daemon.exe remove myservice
 ```
 
 `--stop-timeout` defaults to `600s` and accepts positive, whole-second Go duration values such as `45s` or `10m`. On Unix platforms, set it during `install` so the generated service configuration waits up to that duration before forcing termination. The option must appear before the executable because arguments after the executable belong to the application.
@@ -114,7 +118,7 @@ On Windows, `--stop-timeout` on `stop`, `restart`, or `remove` controls only how
 ```text
 NAME        STATUS
 api         stopped
-my-service  running
+myservice   running
 ```
 
 
@@ -122,11 +126,11 @@ my-service  running
 
 #### example you can run on arm64 op-system
 ```
-sudo ./daemon install app-test app_test-linux-arm64
+sudo ./daemon install apptest app_test-linux-arm64
 ```
 #### or run on arm32(armv6,armv7,etc..) op-system
 ```
-sudo ./daemon install app-test app_test-linux-arm32
+sudo ./daemon install apptest app_test-linux-arm32
 ```
 
 

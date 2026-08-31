@@ -42,7 +42,11 @@ func (config *serviceConfig) stopTimeoutSeconds() int64 {
 	return int64(config.stopTimeoutDuration() / time.Second)
 }
 
-const managedServicePrefix = "lz_lz_"
+const (
+	managedServicePrefix      = "lz_lz_"
+	maxRegistrationNameLength = 247
+	maxServiceNameLength      = maxRegistrationNameLength - len(managedServicePrefix)
+)
 
 const (
 	ServiceRunning = "running"
@@ -61,7 +65,7 @@ func ManagedServiceName(name string) (string, error) {
 	if strings.HasPrefix(name, managedServicePrefix) {
 		return "", fmt.Errorf("%w: prefix %q is reserved", ErrInvalidName, managedServicePrefix)
 	}
-	if err := validateServiceName(name); err != nil {
+	if err := validateUserServiceName(name); err != nil {
 		return "", err
 	}
 	return managedServicePrefix + name, nil
@@ -172,7 +176,6 @@ func NewWithExecutable(name, description, executablePath string, kind Kind, depe
 }
 
 func newDaemonWithExecutable(name, description string, kind Kind, executablePath string, dependencies []string) (Daemon, error) {
-	name = strings.Join(strings.Fields(name), "_")
 	if err := validateServiceName(name); err != nil {
 		return nil, err
 	}
@@ -208,19 +211,47 @@ func newDaemonWithExecutable(name, description string, kind Kind, executablePath
 }
 
 func validateServiceName(name string) error {
-	if name == "" || name == "." || name == ".." {
+	if name == "" {
 		return ErrInvalidName
 	}
+	if len(name) > maxRegistrationNameLength {
+		return fmt.Errorf("%w: must not exceed %d characters", ErrInvalidName, maxRegistrationNameLength)
+	}
+	if !isASCIILetter(rune(name[0])) {
+		return fmt.Errorf("%w: must start with an ASCII letter", ErrInvalidName)
+	}
 
-	for _, character := range name {
-		if character >= 'a' && character <= 'z' ||
-			character >= 'A' && character <= 'Z' ||
-			character >= '0' && character <= '9' ||
-			strings.ContainsRune("._@-", character) {
+	for _, character := range name[1:] {
+		if isASCIILetter(character) || character >= '0' && character <= '9' || character == '_' {
 			continue
 		}
 		return fmt.Errorf("%w: unsupported character %q", ErrInvalidName, character)
 	}
 
 	return nil
+}
+
+func validateUserServiceName(name string) error {
+	if name == "" {
+		return ErrInvalidName
+	}
+	if len(name) > maxServiceNameLength {
+		return fmt.Errorf("%w: must not exceed %d characters", ErrInvalidName, maxServiceNameLength)
+	}
+	if !isASCIILetter(rune(name[0])) {
+		return fmt.Errorf("%w: must start with an ASCII letter", ErrInvalidName)
+	}
+
+	for _, character := range name[1:] {
+		if isASCIILetter(character) || character >= '0' && character <= '9' {
+			continue
+		}
+		return fmt.Errorf("%w: unsupported character %q", ErrInvalidName, character)
+	}
+
+	return nil
+}
+
+func isASCIILetter(character rune) bool {
+	return character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z'
 }

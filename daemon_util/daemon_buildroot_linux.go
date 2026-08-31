@@ -66,9 +66,6 @@ func (linux *buildrootRecord) Install(args ...string) (string, error) {
 	if err != nil {
 		return installAction + failed, err
 	}
-	if err := validateExecutable(execPatch); err != nil {
-		return installAction + failed, err
-	}
 
 	funcs := template.FuncMap{
 		"shellQuote": shellQuote,

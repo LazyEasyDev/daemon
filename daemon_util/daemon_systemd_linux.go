@@ -9,6 +9,7 @@ package daemon_util
 import (
 	"os"
 	"os/exec"
+	"strings"
 	"text/template"
 )
 
@@ -39,11 +40,21 @@ func (linux *systemDRecord) isInstalled() bool {
 
 // Check service is running
 func (linux *systemDRecord) checkRunning() (string, bool) {
-	if err := exec.Command("systemctl", "is-active", "--quiet", linux.name+".service").Run(); err == nil {
+	output, _ := exec.Command("systemctl", "is-active", linux.name+".service").Output()
+	if systemDStatusActive(string(output)) {
 		return "Service is running...", true
 	}
 
 	return "Service is stopped", false
+}
+
+func systemDStatusActive(status string) bool {
+	switch strings.TrimSpace(status) {
+	case "active", "activating", "reloading", "refreshing":
+		return true
+	default:
+		return false
+	}
 }
 
 // Install the service
@@ -62,9 +73,6 @@ func (linux *systemDRecord) Install(args ...string) (string, error) {
 
 	execPatch, err := resolveExecutablePath(linux.name, linux.executablePath)
 	if err != nil {
-		return installAction + failed, err
-	}
-	if err := validateExecutable(execPatch); err != nil {
 		return installAction + failed, err
 	}
 

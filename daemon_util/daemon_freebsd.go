@@ -89,14 +89,12 @@ func ListServiceStatuses() ([]ServiceStatus, error) {
 func (bsd *bsdRecord) checkRunning() (string, bool) {
 	output, err := exec.Command("service", bsd.name, bsd.getCmd("status")).Output()
 	if err == nil {
-		if matched, err := regexp.MatchString(bsd.name, string(output)); err == nil && matched {
-			reg := regexp.MustCompile("pid  ([0-9]+)")
-			data := reg.FindStringSubmatch(string(output))
-			if len(data) > 1 {
-				return "Service (pid  " + data[1] + ") is running...", true
-			}
-			return "Service is running...", true
+		reg := regexp.MustCompile("pid  ([0-9]+)")
+		data := reg.FindStringSubmatch(string(output))
+		if len(data) > 1 {
+			return "Service (pid  " + data[1] + ") is running...", true
 		}
+		return "Service is running...", true
 	}
 
 	return "Service is stopped", false
@@ -120,9 +118,6 @@ func (bsd *bsdRecord) Install(args ...string) (string, error) {
 	if err != nil {
 		return installAction + failed, err
 	}
-	if err := validateExecutable(execPatch); err != nil {
-		return installAction + failed, err
-	}
 
 	funcs := template.FuncMap{
 		"shellQuote": shellQuote,
@@ -135,9 +130,15 @@ func (bsd *bsdRecord) Install(args ...string) (string, error) {
 		&struct {
 			Name, RCName, RCVar, Description, Path, Args string
 			StopTimeoutSeconds                           int64
-		}{bsd.name, freeBSDRCName(bsd.name), freeBSDRCVar(bsd.name), bsd.description, execPatch, shellQuoteArgs(args), bsd.stopTimeoutSeconds()},
+		}{bsd.name, bsd.name, bsd.name + "_enable", bsd.description, execPatch, shellQuoteArgs(args), bsd.stopTimeoutSeconds()},
 		0755,
 	); err != nil {
+		return installAction + failed, err
+	}
+	if err := exec.Command("service", bsd.name, "enable").Run(); err != nil {
+		if removeErr := os.Remove(srvPath); removeErr != nil {
+			return installAction + failed, errors.Join(err, removeErr)
+		}
 		return installAction + failed, err
 	}
 
@@ -156,6 +157,9 @@ func (bsd *bsdRecord) Remove() (string, error) {
 		return removeAction + failed, ErrNotInstalled
 	}
 
+	if err := exec.Command("service", bsd.name, "disable").Run(); err != nil {
+		return removeAction + failed, err
+	}
 	if err := os.Remove(bsd.servicePath()); err != nil {
 		return removeAction + failed, err
 	}
@@ -249,10 +253,7 @@ const defaultBSDConfig = `#!/bin/sh
 # REQUIRE: NETWORKING syslogd
 # KEYWORD:
 
-# Add the following lines to /etc/rc.conf to enable the {{.Name}}:
-#
-# {{.RCVar}}="YES"
-#
+# Boot startup is managed with service {{.Name}} enable/disable.
 
 
 . /etc/rc.subr

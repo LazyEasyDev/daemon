@@ -9,6 +9,7 @@ package daemon_util
 import (
 	"fmt"
 	"os"
+	"runtime"
 )
 
 const statNotInstalled = "Service not installed"
@@ -31,7 +32,32 @@ func validateExecutable(path string) error {
 	if info.Mode().Perm()&0111 == 0 {
 		return fmt.Errorf("%w: file is not executable", ErrInvalidExecutablePath)
 	}
-	return nil
+	return validateNativeExecutable(path)
+}
+
+func validateNativeExecutable(path string) error {
+	magic, err := readExecutableMagic(path)
+	if runtime.GOOS == "darwin" {
+		if err == nil {
+			switch magic {
+			case [4]byte{0xfe, 0xed, 0xfa, 0xce},
+				[4]byte{0xce, 0xfa, 0xed, 0xfe},
+				[4]byte{0xfe, 0xed, 0xfa, 0xcf},
+				[4]byte{0xcf, 0xfa, 0xed, 0xfe},
+				[4]byte{0xca, 0xfe, 0xba, 0xbe},
+				[4]byte{0xbe, 0xba, 0xfe, 0xca},
+				[4]byte{0xca, 0xfe, 0xba, 0xbf},
+				[4]byte{0xbf, 0xba, 0xfe, 0xca}:
+				return nil
+			}
+		}
+		return fmt.Errorf("%w: file is not a native Mach-O executable", ErrInvalidExecutablePath)
+	}
+
+	if err == nil && magic == [4]byte{0x7f, 'E', 'L', 'F'} {
+		return nil
+	}
+	return fmt.Errorf("%w: file is not a native ELF executable", ErrInvalidExecutablePath)
 }
 
 func createServiceLinks(target string, links []string) error {

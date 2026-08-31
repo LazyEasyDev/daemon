@@ -9,7 +9,7 @@ package daemon_util
 import (
 	"os"
 	"os/exec"
-	"regexp"
+	"strings"
 	"text/template"
 )
 
@@ -41,13 +41,19 @@ func (linux *openWrtRecord) isInstalled() bool {
 func (linux *openWrtRecord) checkRunning() (string, bool) {
 	srvPath := linux.servicePath()
 	output, err := exec.Command(srvPath, "status").Output()
-	if err == nil {
-		if matched, err := regexp.MatchString("running", string(output)); err == nil && matched {
-			return "Service is running...", true
-		}
+	if openWrtStatusActive(string(output), commandExitCode(err)) {
+		return "Service is running...", true
 	}
 
 	return "Service is stopped", false
+}
+
+func openWrtStatusActive(status string, exitCode int) bool {
+	status = strings.TrimSpace(status)
+	if exitCode == 0 {
+		return status == "running" || strings.HasPrefix(status, "running (")
+	}
+	return exitCode == 5 && status == "not running"
 }
 
 // Install the service
@@ -66,9 +72,6 @@ func (linux *openWrtRecord) Install(args ...string) (string, error) {
 
 	execPatch, err := resolveExecutablePath(linux.name, linux.executablePath)
 	if err != nil {
-		return installAction + failed, err
-	}
-	if err := validateExecutable(execPatch); err != nil {
 		return installAction + failed, err
 	}
 

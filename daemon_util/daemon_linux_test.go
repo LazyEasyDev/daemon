@@ -75,6 +75,12 @@ func TestOpenRCRespawnsWithoutRetryLimit(t *testing.T) {
 	}
 }
 
+func TestUpstartRespawnsWithoutRetryLimit(t *testing.T) {
+	if !strings.Contains(defaultUpstartConfig, "respawn limit 0 5") {
+		t.Fatal("Upstart config must respawn without a retry limit")
+	}
+}
+
 func TestUpstartStatusActive(t *testing.T) {
 	tests := []struct {
 		status string
@@ -93,6 +99,48 @@ func TestUpstartStatusActive(t *testing.T) {
 	for _, test := range tests {
 		if got := upstartStatusActive("worker", test.status); got != test.want {
 			t.Errorf("upstartStatusActive(%q) = %v, want %v", test.status, got, test.want)
+		}
+	}
+}
+
+func TestSystemDStatusActive(t *testing.T) {
+	tests := []struct {
+		status string
+		want   bool
+	}{
+		{status: "active", want: true},
+		{status: "activating", want: true},
+		{status: "reloading", want: true},
+		{status: "refreshing", want: true},
+		{status: "inactive"},
+		{status: "failed"},
+		{status: "deactivating"},
+	}
+
+	for _, test := range tests {
+		if got := systemDStatusActive(test.status); got != test.want {
+			t.Errorf("systemDStatusActive(%q) = %v, want %v", test.status, got, test.want)
+		}
+	}
+}
+
+func TestOpenWrtStatusActive(t *testing.T) {
+	tests := []struct {
+		status   string
+		exitCode int
+		want     bool
+	}{
+		{status: "running", want: true},
+		{status: "running (1/2)", want: true},
+		{status: "not running", exitCode: 5, want: true},
+		{status: "inactive", exitCode: 3},
+		{status: "not running", exitCode: 1},
+		{status: "unknown instance", exitCode: 4},
+	}
+
+	for _, test := range tests {
+		if got := openWrtStatusActive(test.status, test.exitCode); got != test.want {
+			t.Errorf("openWrtStatusActive(%q, %d) = %v, want %v", test.status, test.exitCode, got, test.want)
 		}
 	}
 }
@@ -117,7 +165,6 @@ func TestSystemVValidatesProcessBeforeSignals(t *testing.T) {
 	for _, command := range []string{
 		`[ "$pid" -gt 1 ]`,
 		`[ "$exec" -ef "/proc/$pid/exe" ]`,
-		`tr '\000' '\n' < "/proc/$pid/cmdline" | grep -Fqx "$exec"`,
 		`if ! is_expected_process; then`,
 		`if is_expected_process && ! kill -KILL "$pid"`,
 	} {
@@ -127,6 +174,9 @@ func TestSystemVValidatesProcessBeforeSignals(t *testing.T) {
 	}
 	if strings.Contains(defaultSystemVConfig, `while kill -0 "$pid"`) {
 		t.Fatal("System V stop loop still trusts raw PID liveness")
+	}
+	if strings.Contains(defaultSystemVConfig, `/proc/$pid/cmdline`) {
+		t.Fatal("System V config still contains script-specific process matching")
 	}
 }
 

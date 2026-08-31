@@ -8,6 +8,7 @@
 package daemon_util
 
 import (
+	"errors"
 	"log"
 	"os"
 	"os/exec"
@@ -51,7 +52,8 @@ func ListServiceStatuses() ([]ServiceStatus, error) {
 		serviceDirectory{
 			path: "/etc/init.d",
 			isRunning: func(name string) bool {
-				return exec.Command(filepath.Join("/etc/init.d", name), "status").Run() == nil
+				output, err := exec.Command(filepath.Join("/etc/init.d", name), "status").Output()
+				return err == nil || openWrtStatusActive(string(output), commandExitCode(err))
 			},
 		},
 		serviceDirectory{
@@ -62,6 +64,17 @@ func ListServiceStatuses() ([]ServiceStatus, error) {
 			},
 		},
 	)
+}
+
+func commandExitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var exitError *exec.ExitError
+	if errors.As(err, &exitError) {
+		return exitError.ExitCode()
+	}
+	return -1
 }
 
 // Get the daemon properly

@@ -73,9 +73,6 @@ func (linux *systemVRecord) Install(args ...string) (string, error) {
 	if err != nil {
 		return installAction + failed, err
 	}
-	if err := validateExecutable(execPatch); err != nil {
-		return installAction + failed, err
-	}
 
 	funcs := template.FuncMap{
 		"shellQuote": shellQuote,
@@ -267,9 +264,7 @@ read_pid() {
 
 is_expected_process() {
 	read_pid || return 1
-	[ "$exec" -ef "/proc/$pid/exe" ] && return 0
-	[ -r "/proc/$pid/cmdline" ] || return 1
-	tr '\000' '\n' < "/proc/$pid/cmdline" | grep -Fqx "$exec"
+	[ "$exec" -ef "/proc/$pid/exe" ]
 }
 
 start() {

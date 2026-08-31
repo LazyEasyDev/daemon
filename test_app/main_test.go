@@ -96,6 +96,25 @@ func TestApplicationStopsAfterConfiguredDuration(t *testing.T) {
 	}
 }
 
+func TestApplicationStartStopsAfterConfiguredDuration(t *testing.T) {
+	app := newApplication(config{Port: 0, StopAfter: 10 * time.Millisecond}, nil, "/opt/test-app")
+	fatalErr := make(chan error, 1)
+	app.fatal = func(err error) {
+		fatalErr <- err
+	}
+	app.Start()
+	defer app.Stop()
+
+	select {
+	case err := <-fatalErr:
+		if !errors.Is(err, errStopAfter) {
+			t.Fatalf("fatal error = %v, want %v", err, errStopAfter)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Start() did not apply the configured stop-after duration")
+	}
+}
+
 func TestApplicationDelaysGracefulStop(t *testing.T) {
 	const stopDelay = 50 * time.Millisecond
 	app := newApplication(config{Port: 0, StopDelay: stopDelay}, nil, "/opt/test-app")

@@ -6,6 +6,30 @@
 
 package daemon_util
 
+import (
+	"fmt"
+	"os"
+)
+
+func validateExecutable(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("%w: %q is not a regular file", ErrInvalidExecutablePath, path)
+	}
+	return validateNativeExecutable(path)
+}
+
+func validateNativeExecutable(path string) error {
+	magic, err := readExecutableMagic(path)
+	if err == nil && magic[0] == 'M' && magic[1] == 'Z' {
+		return nil
+	}
+	return fmt.Errorf("%w: file is not a native PE executable", ErrInvalidExecutablePath)
+}
+
 // SystemError contains error description and corresponded action helper to fix it
 type SystemError struct {
 	Title       string

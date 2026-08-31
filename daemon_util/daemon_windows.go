@@ -168,9 +168,6 @@ func (windows *windowsRecord) Install(args ...string) (string, error) {
 	if err != nil {
 		return installAction + failed, err
 	}
-	if err := validateWindowsExecutable(execp); err != nil {
-		return installAction + failed, err
-	}
 
 	m, err := connectServiceManager(winapi.SC_MANAGER_CONNECT | winapi.SC_MANAGER_CREATE_SERVICE)
 	if err != nil {
@@ -232,17 +229,6 @@ func (windows *windowsRecord) Install(args ...string) (string, error) {
 	}
 
 	return installAction + " completed.", nil
-}
-
-func validateWindowsExecutable(path string) error {
-	info, err := os.Stat(path)
-	if err != nil {
-		return err
-	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("%w: %q is not a regular file", ErrInvalidExecutablePath, path)
-	}
-	return nil
 }
 
 // Remove the service

@@ -86,8 +86,8 @@ func TestStopAndWaitUsesConfiguredTimeoutWithoutKilling(t *testing.T) {
 	}
 }
 
-func TestValidateWindowsExecutableRejectsDirectory(t *testing.T) {
-	err := validateWindowsExecutable(t.TempDir())
+func TestValidateExecutableRejectsInvalidWindowsFiles(t *testing.T) {
+	err := validateExecutable(t.TempDir())
 	if !errors.Is(err, ErrInvalidExecutablePath) {
 		t.Fatalf("error = %v, want %v", err, ErrInvalidExecutablePath)
 	}
@@ -96,8 +96,22 @@ func TestValidateWindowsExecutableRejectsDirectory(t *testing.T) {
 	if err := os.WriteFile(target, []byte("test"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateWindowsExecutable(target); err != nil {
+	if err := validateExecutable(target); !errors.Is(err, ErrInvalidExecutablePath) {
+		t.Fatalf("error = %v, want %v", err, ErrInvalidExecutablePath)
+	}
+	if err := os.WriteFile(target, []byte{'M', 'Z', 0, 0}, 0600); err != nil {
 		t.Fatal(err)
+	}
+	if err := validateExecutable(target); err != nil {
+		t.Fatalf("validateExecutable(magic-only file) error = %v", err)
+	}
+
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateExecutable(executable); err != nil {
+		t.Fatalf("validateExecutable(native executable) error = %v", err)
 	}
 }
 

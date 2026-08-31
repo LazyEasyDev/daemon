@@ -2,9 +2,56 @@ package daemon_util
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestManagedServiceName(t *testing.T) {
+	name, err := ManagedServiceName("Worker1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "lz_lz_Worker1" {
+		t.Fatalf("managed service name = %q, want %q", name, "lz_lz_Worker1")
+	}
+}
+
+func TestManagedServiceNameRejectsNonPortableNames(t *testing.T) {
+	tests := []string{
+		"",
+		"1worker",
+		"my service",
+		"my-service",
+		"my_service",
+		"my.service",
+		"worker@1",
+		"wörker",
+		strings.Repeat("a", maxServiceNameLength+1),
+	}
+
+	for _, name := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := ManagedServiceName(name); !errors.Is(err, ErrInvalidName) {
+				t.Fatalf("ManagedServiceName(%q) error = %v, want ErrInvalidName", name, err)
+			}
+		})
+	}
+}
+
+func TestValidateServiceNameAcceptsInternalPrefix(t *testing.T) {
+	if err := validateServiceName("lz_lz_Worker1"); err != nil {
+		t.Fatalf("validateServiceName() error = %v", err)
+	}
+}
+
+func TestValidateServiceNameRejectsUnsafeRCName(t *testing.T) {
+	for _, name := range []string{"1worker", "worker-name", "worker.name", "worker@1"} {
+		if err := validateServiceName(name); !errors.Is(err, ErrInvalidName) {
+			t.Fatalf("validateServiceName(%q) error = %v, want ErrInvalidName", name, err)
+		}
+	}
+}
 
 func TestServiceConfigStopTimeout(t *testing.T) {
 	var config serviceConfig

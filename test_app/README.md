@@ -23,8 +23,8 @@ Add `--stop-after 30s` when installing the service. The app shuts down and exits
 daemon_bin="$PWD/build/daemon-darwin-arm64"
 app_bin="$PWD/test_app/build/test-app-darwin-arm64"
 
-"$daemon_bin" install test-app "$app_bin" --port 18080 --stop-after 30s
-"$daemon_bin" start test-app
+"$daemon_bin" install testapp "$app_bin" --port 18080 --stop-after 30s
+"$daemon_bin" start testapp
 curl http://127.0.0.1:18080/
 ```
 
@@ -35,7 +35,7 @@ The application also writes its start time to the service log in RFC3339 format 
 To test graceful-stop timeout handling, install the app with `--stop_delay`. When it receives SIGTERM or the equivalent Windows service stop request, it waits for that duration before shutting down:
 
 ```sh
-"$daemon_bin" install --stop-timeout 10s test-app "$app_bin" --port 18080 --stop_delay 30s
+"$daemon_bin" install --stop-timeout 10s testapp "$app_bin" --port 18080 --stop_delay 30s
 ```
 
 With these values, service managers that enforce `--stop-timeout` should force termination after 10 seconds. The `--stop-after` failure timer does not apply `--stop_delay`.
@@ -78,17 +78,17 @@ Choose binaries matching the host architecture. For Linux AMD64:
 daemon_bin="$PWD/build/daemon-linux-amd64"
 app_bin="$PWD/test_app/build/test-app-linux-amd64"
 
-sudo "$daemon_bin" install test-app "$app_bin" \
+sudo "$daemon_bin" install testapp "$app_bin" \
   --enabled=true \
   --message "hello service" \
   --count 7 \
   --port 18080
 
-sudo "$daemon_bin" start test-app
-sudo "$daemon_bin" status test-app
+sudo "$daemon_bin" start testapp
+sudo "$daemon_bin" status testapp
 curl http://127.0.0.1:18080/
-sudo "$daemon_bin" stop test-app
-sudo "$daemon_bin" remove test-app
+sudo "$daemon_bin" stop testapp
+sudo "$daemon_bin" remove testapp
 ```
 
 For FreeBSD, substitute the matching `daemon-freebsd-*` and `test-app-freebsd-*` filenames.
@@ -101,16 +101,16 @@ For Apple Silicon:
 daemon_bin="$PWD/build/daemon-darwin-arm64"
 app_bin="$PWD/test_app/build/test-app-darwin-arm64"
 
-"$daemon_bin" install test-app "$app_bin" \
+"$daemon_bin" install testapp "$app_bin" \
   --enabled=true \
   --message "hello service" \
   --count 7 \
   --port 18080
 
-"$daemon_bin" start test-app
+"$daemon_bin" start testapp
 curl http://127.0.0.1:18080/
-"$daemon_bin" stop test-app
-"$daemon_bin" remove test-app
+"$daemon_bin" stop testapp
+"$daemon_bin" remove testapp
 ```
 
 Use the AMD64 binaries on Intel Macs.
@@ -123,9 +123,9 @@ Run PowerShell as Administrator, then use the binaries matching the host archite
 $daemon = "$PWD\build\daemon-windows-amd64.exe"
 $app = "$PWD\test_app\build\test-app-windows-amd64.exe"
 
-& $daemon install test-app $app --enabled=true --message "hello service" --count 7 --port 18080
-& $daemon start test-app
+& $daemon install testapp $app --enabled=true --message "hello service" --count 7 --port 18080
+& $daemon start testapp
 Invoke-RestMethod http://127.0.0.1:18080/
-& $daemon stop test-app
-& $daemon remove test-app
+& $daemon stop testapp
+& $daemon remove testapp
 ```

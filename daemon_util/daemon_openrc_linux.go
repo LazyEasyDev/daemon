@@ -57,9 +57,6 @@ func (linux *openRCRecord) Install(args ...string) (string, error) {
 	if err != nil {
 		return installAction + failed, err
 	}
-	if err := validateExecutable(executablePath); err != nil {
-		return installAction + failed, err
-	}
 
 	servicePath := linux.servicePath()
 	if err := writeTemplateFile(

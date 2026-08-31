@@ -75,9 +75,6 @@ func (linux *upstartRecord) Install(args ...string) (string, error) {
 	if err != nil {
 		return installAction + failed, err
 	}
-	if err := validateExecutable(execPatch); err != nil {
-		return installAction + failed, err
-	}
 
 	funcs := template.FuncMap{
 		"shellQuote": shellQuote,
@@ -206,6 +203,7 @@ start on runlevel [2345]
 stop on runlevel [016]
 
 respawn
+respawn limit 0 5
 kill timeout {{.StopTimeoutSeconds}}
 
 exec {{shellQuote .Path}} {{.Args}}

@@ -42,15 +42,18 @@ type status struct {
 }
 
 type application struct {
-	config     config
-	args       []string
-	executable string
-	startedAt  time.Time
-	server     *http.Server
-	serveErr   chan error
-	startMu    sync.Mutex
-	started    bool
-	stopOnce   sync.Once
+	config          config
+	args            []string
+	executable      string
+	startedAt       time.Time
+	server          *http.Server
+	serveErr        chan error
+	stopAfterCancel chan struct{}
+	fatal           func(error)
+	startMu         sync.Mutex
+	started         bool
+	stopAfterOnce   sync.Once
+	stopOnce        sync.Once
 }
 
 func parseConfig(args []string) (config, error) {
@@ -83,11 +86,15 @@ func parseConfig(args []string) (config, error) {
 
 func newApplication(cfg config, args []string, executable string) *application {
 	app := &application{
-		config:     cfg,
-		args:       append([]string(nil), args...),
-		executable: executable,
-		startedAt:  time.Now(),
-		serveErr:   make(chan error, 1),
+		config:          cfg,
+		args:            append([]string(nil), args...),
+		executable:      executable,
+		startedAt:       time.Now(),
+		serveErr:        make(chan error, 1),
+		stopAfterCancel: make(chan struct{}),
+		fatal: func(err error) {
+			log.Fatal(err)
+		},
 	}
 
 	mux := http.NewServeMux()
@@ -126,6 +133,25 @@ func (app *application) Start() {
 	if err := app.start(); err != nil {
 		log.Fatalf("start HTTP server: %v", err)
 	}
+	app.startStopAfterTimer()
+}
+
+func (app *application) startStopAfterTimer() {
+	if app.config.StopAfter <= 0 {
+		return
+	}
+	app.stopAfterOnce.Do(func() {
+		go func() {
+			timer := time.NewTimer(app.config.StopAfter)
+			defer timer.Stop()
+			select {
+			case <-timer.C:
+				app.shutdown()
+				app.fatal(fmt.Errorf("%w: %s", errStopAfter, app.config.StopAfter))
+			case <-app.stopAfterCancel:
+			}
+		}()
+	})
 }
 
 func (app *application) start() error {
@@ -151,6 +177,7 @@ func (app *application) start() error {
 
 func (app *application) Stop() {
 	app.stopOnce.Do(func() {
+		close(app.stopAfterCancel)
 		if app.config.StopDelay > 0 {
 			log.Printf("delaying graceful stop for %s", app.config.StopDelay)
 			time.Sleep(app.config.StopDelay)

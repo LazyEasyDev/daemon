@@ -78,6 +78,7 @@ func install(_ context.Context, command *cli.Command) error {
 	if err != nil {
 		return err
 	}
+	_ = writeServiceMetadata(args[0], executablePath)
 	fmt.Println(result)
 
 	return nil
@@ -88,16 +89,19 @@ func list(_ context.Context, _ *cli.Command) error {
 	if err != nil {
 		return err
 	}
+	for index := range services {
+		services[index].ApplicationPath = readServiceMetadata(services[index].Name)
+	}
 	return writeServiceList(os.Stdout, services)
 }
 
 func writeServiceList(output io.Writer, services []daemon_util.ServiceStatus) error {
 	writer := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(writer, "NAME\tSTATUS"); err != nil {
+	if _, err := fmt.Fprintln(writer, "NAME\tSTATUS\tAPP"); err != nil {
 		return err
 	}
 	for _, service := range services {
-		if _, err := fmt.Fprintf(writer, "%s\t%s\n", service.Name, service.Status); err != nil {
+		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\n", service.Name, service.Status, service.ApplicationPath); err != nil {
 			return err
 		}
 	}
@@ -117,6 +121,7 @@ func remove(_ context.Context, command *cli.Command) error {
 	if err != nil {
 		return err
 	}
+	_ = removeServiceMetadata(command.Args().First())
 	fmt.Println(result)
 
 	return nil

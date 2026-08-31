@@ -150,13 +150,15 @@ Windows services use the LocalSystem account by default. Keep `daemon.exe`, the 
 
 On Windows, `--stop-timeout` on `stop`, `restart`, or `remove` separately controls how long this tool waits for SCM to report `STOPPED`. A timeout from one of these commands returns an error and does not terminate the service process.
 
-`list` and `ls` show each managed service and its current status:
+`list` and `ls` show each managed service, its current status, and the configured application path:
 
 ```text
-NAME        STATUS
-api         stopped
-myservice   running
+NAME        STATUS   APP
+api         stopped  /opt/api
+myservice   running  /opt/myservice/current
 ```
+
+The application path is informational and preserves the path supplied during installation, including a symbolic link. Metadata is stored in the platform application-data directory and does not control service operations. If metadata cannot be written or read, or is malformed, installation and listing still succeed and the `APP` column is blank for that service. Removing a service also removes its metadata on a best-effort basis.
 
 
 ### Test applications

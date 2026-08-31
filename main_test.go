@@ -153,13 +153,13 @@ func TestWriteServiceList(t *testing.T) {
 	var output bytes.Buffer
 	services := []daemon_util.ServiceStatus{
 		{Name: "api", Status: daemon_util.ServiceStopped},
-		{Name: "worker", Status: daemon_util.ServiceRunning},
+		{Name: "worker", Status: daemon_util.ServiceRunning, ApplicationPath: "/opt/worker"},
 	}
 	if err := writeServiceList(&output, services); err != nil {
 		t.Fatal(err)
 	}
 
-	want := "NAME    STATUS\napi     stopped\nworker  running\n"
+	want := "NAME    STATUS   APP\napi     stopped  \nworker  running  /opt/worker\n"
 	if output.String() != want {
 		t.Fatalf("list output = %q, want %q", output.String(), want)
 	}

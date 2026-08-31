@@ -55,8 +55,9 @@ const (
 
 // ServiceStatus describes a service registered by this tool.
 type ServiceStatus struct {
-	Name   string
-	Status string
+	Name            string
+	Status          string
+	ApplicationPath string
 }
 
 // ManagedServiceName returns the internal registration name for a user-facing

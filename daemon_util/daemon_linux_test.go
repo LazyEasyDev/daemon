@@ -5,8 +5,33 @@ package daemon_util
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestOpenWrtRespawnsWithoutRetryLimit(t *testing.T) {
+	if !strings.Contains(defaultOpenWrtConfig, "procd_set_param respawn 0 30 0") {
+		t.Fatal("OpenWrt config must respawn after 30 seconds without a retry limit")
+	}
+	if strings.Contains(defaultOpenWrtConfig, "procd_set_param respawn 0 30 10000") {
+		t.Fatal("OpenWrt config still contains the old finite retry limit")
+	}
+}
+
+func TestOpenRCRespawnsWithoutRetryLimit(t *testing.T) {
+	for _, setting := range []string{
+		"supervisor=supervise-daemon",
+		"respawn_delay=30",
+		"respawn_max=0",
+	} {
+		if !strings.Contains(defaultOpenRCConfig, setting) {
+			t.Fatalf("OpenRC config does not contain %q", setting)
+		}
+	}
+	if strings.Contains(defaultOpenRCConfig, "command_background=yes") {
+		t.Fatal("OpenRC config must leave the application in the foreground")
+	}
+}
 
 func TestSystemVDetected(t *testing.T) {
 	tests := []struct {

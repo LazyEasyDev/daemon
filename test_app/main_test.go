@@ -2,11 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http/httptest"
 	"slices"
 	"testing"
+	"time"
 )
 
 func TestParseConfig(t *testing.T) {
@@ -15,12 +17,13 @@ func TestParseConfig(t *testing.T) {
 		"--message", "hello service",
 		"--count", "7",
 		"--port", "18081",
+		"--stop-after", "30s",
 	}
 	cfg, err := parseConfig(args)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.Enabled || cfg.Message != "hello service" || cfg.Count != 7 || cfg.Port != 18081 {
+	if !cfg.Enabled || cfg.Message != "hello service" || cfg.Count != 7 || cfg.Port != 18081 || cfg.StopAfter != 30*time.Second {
 		t.Fatalf("parsed config = %+v", cfg)
 	}
 }
@@ -77,4 +80,11 @@ func TestApplicationStartCanRetryAfterPortConflict(t *testing.T) {
 		t.Fatalf("start() did not recover after the address was released: %v", err)
 	}
 	app.Stop()
+}
+
+func TestApplicationStopsAfterConfiguredDuration(t *testing.T) {
+	app := newApplication(config{Port: 0, StopAfter: 10 * time.Millisecond}, nil, "/opt/test-app")
+	if err := app.run(); !errors.Is(err, errStopAfter) {
+		t.Fatalf("run() error = %v, want %v", err, errStopAfter)
+	}
 }

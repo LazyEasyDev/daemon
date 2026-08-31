@@ -224,9 +224,8 @@ start_service() {
 	# ubus call service list -check instance
 	procd_open_instance
 
-	#respawn
-	# threshold:3600; timeout:5; retry:5
-	procd_set_param respawn 0 30 10000
+	# threshold:0; timeout:30; retry:0 (unlimited)
+	procd_set_param respawn 0 30 0
 	
 	# run 
 	procd_set_param command "$PROG" {{.Args}}

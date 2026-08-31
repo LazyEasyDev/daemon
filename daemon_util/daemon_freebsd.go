@@ -257,13 +257,14 @@ const defaultBSDConfig = `#!/bin/sh
 
 name={{shellQuote .RCName}}
 rcvar={{shellQuote .RCVar}}
-command={{shellQuote .Path}}
+command="/usr/sbin/daemon"
+app_command={{shellQuote .Path}}
 pidfile="/var/run/$name.pid"
 
 start_cmd="daemon_start"
 daemon_start()
 {
-	/usr/sbin/daemon -p "$pidfile" -f "$command" {{.Args}}
+	"$command" -R 30 -P "$pidfile" -f "$app_command" {{.Args}}
 }
 load_rc_config $name
 run_rc_command "$1"

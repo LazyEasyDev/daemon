@@ -174,7 +174,9 @@ name={{shellQuote .Name}}
 description={{shellQuote .Description}}
 command={{shellQuote .Path}}
 command_args={{shellQuote .Args}}
-command_background=yes
+supervisor=supervise-daemon
+respawn_delay=30
+respawn_max=0
 pidfile="/run/${RC_SVCNAME}.pid"
 retry="TERM/12/KILL/5"
 

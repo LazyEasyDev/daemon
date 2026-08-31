@@ -22,11 +22,14 @@ import (
 )
 
 type config struct {
-	Enabled bool   `json:"enabled"`
-	Message string `json:"message"`
-	Count   int    `json:"count"`
-	Port    int    `json:"port"`
+	Enabled   bool          `json:"enabled"`
+	Message   string        `json:"message"`
+	Count     int           `json:"count"`
+	Port      int           `json:"port"`
+	StopAfter time.Duration `json:"stop_after"`
 }
+
+var errStopAfter = errors.New("configured stop-after elapsed")
 
 type status struct {
 	Config      config    `json:"config"`
@@ -57,6 +60,7 @@ func parseConfig(args []string) (config, error) {
 	flags.StringVar(&cfg.Message, "message", "hello from test app", "message returned by the server")
 	flags.IntVar(&cfg.Count, "count", 1, "sample integer value")
 	flags.IntVar(&cfg.Port, "port", 18080, "HTTP listen port")
+	flags.DurationVar(&cfg.StopAfter, "stop-after", 0, "stop with a failure after this duration")
 	if err := flags.Parse(args); err != nil {
 		return config{}, err
 	}
@@ -65,6 +69,9 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.Port < 1 || cfg.Port > 65535 {
 		return config{}, fmt.Errorf("port must be between 1 and 65535")
+	}
+	if cfg.StopAfter < 0 {
+		return config{}, fmt.Errorf("stop-after must not be negative")
 	}
 	return cfg, nil
 }
@@ -129,7 +136,7 @@ func (app *application) start() error {
 	}
 	app.started = true
 	go func() {
-		log.Printf("test app listening on http://127.0.0.1:%d", app.config.Port)
+		log.Printf("test app started at %s and is listening on http://127.0.0.1:%d", app.startedAt.Format(time.RFC3339Nano), app.config.Port)
 		if err := app.server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			app.serveErr <- err
 		}
@@ -148,18 +155,37 @@ func (app *application) Stop() {
 }
 
 func (app *application) Run() {
-	app.Start()
+	if err := app.run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func (app *application) run() error {
+	if err := app.start(); err != nil {
+		return fmt.Errorf("start HTTP server: %w", err)
+	}
 
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(interrupt)
 
+	var stopTimer <-chan time.Time
+	if app.config.StopAfter > 0 {
+		timer := time.NewTimer(app.config.StopAfter)
+		defer timer.Stop()
+		stopTimer = timer.C
+	}
+
 	select {
 	case received := <-interrupt:
 		log.Printf("received %s", received)
 		app.Stop()
+		return nil
+	case <-stopTimer:
+		app.Stop()
+		return fmt.Errorf("%w: %s", errStopAfter, app.config.StopAfter)
 	case err := <-app.serveErr:
-		log.Printf("HTTP server failed: %v", err)
+		return fmt.Errorf("HTTP server failed: %w", err)
 	}
 }
 

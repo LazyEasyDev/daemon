@@ -248,6 +248,32 @@ func TestSystemVDetected(t *testing.T) {
 	}
 }
 
+func TestLinuxListingUsesDetectedBackend(t *testing.T) {
+	root := t.TempDir()
+	systemdDirectory := filepath.Join(root, "run/systemd/system")
+	serviceDirectory := filepath.Join(root, "etc/systemd/system")
+	legacyDirectory := filepath.Join(root, "etc/init.d")
+	for _, directory := range []string{systemdDirectory, serviceDirectory, legacyDirectory} {
+		if err := os.MkdirAll(directory, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(serviceDirectory, managedServicePrefix+"current.service"), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyDirectory, managedServicePrefix+"legacy"), nil, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	names, err := listLinuxServices(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 1 || names[0] != "current" {
+		t.Fatalf("listed services = %q, want only the detected systemd service", names)
+	}
+}
+
 func TestBuildrootStyleInitDetected(t *testing.T) {
 	tests := []struct {
 		name       string

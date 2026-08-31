@@ -20,50 +20,148 @@ var openwrtNameArr = []string{
 	"wrt",
 }
 
+type linuxBackend struct {
+	name             string
+	warning          bool
+	detected         func(string) bool
+	serviceDirectory func(string) serviceDirectory
+	newRecord        func(string, string, []string, string) (Daemon, error)
+}
+
+var linuxBackends = []linuxBackend{
+	{
+		name: "systemd",
+		detected: func(root string) bool {
+			_, err := os.Stat(filepath.Join(root, "run/systemd/system"))
+			return err == nil
+		},
+		serviceDirectory: func(root string) serviceDirectory {
+			return serviceDirectory{
+				path:   filepath.Join(root, "etc/systemd/system"),
+				suffix: ".service",
+				isRunning: func(name string) bool {
+					_, running := (&systemDRecord{name: name}).checkRunning()
+					return running
+				},
+			}
+		},
+		newRecord: func(name, description string, dependencies []string, executablePath string) (Daemon, error) {
+			if err := validateSystemdDependencies(dependencies); err != nil {
+				return nil, err
+			}
+			return &systemDRecord{name: name, description: description, dependencies: dependencies, executablePath: executablePath, template: defaultSystemDConfig}, nil
+		},
+	},
+	{
+		name:     "openrc",
+		detected: openRCDetected,
+		serviceDirectory: func(root string) serviceDirectory {
+			return serviceDirectory{
+				path: filepath.Join(root, "etc/init.d"),
+				isRunning: func(name string) bool {
+					_, running := (&openRCRecord{name: name}).checkRunning()
+					return running
+				},
+			}
+		},
+		newRecord: func(name, description string, _ []string, executablePath string) (Daemon, error) {
+			return &openRCRecord{name: name, description: description, executablePath: executablePath, template: defaultOpenRCConfig}, nil
+		},
+	},
+	{
+		name: "upstart",
+		detected: func(root string) bool {
+			_, err := os.Stat(filepath.Join(root, "sbin/initctl"))
+			return err == nil
+		},
+		serviceDirectory: func(root string) serviceDirectory {
+			return serviceDirectory{
+				path:   filepath.Join(root, "etc/init"),
+				suffix: ".conf",
+				isRunning: func(name string) bool {
+					_, running := (&upstartRecord{name: name}).checkRunning()
+					return running
+				},
+			}
+		},
+		newRecord: func(name, description string, _ []string, executablePath string) (Daemon, error) {
+			return &upstartRecord{name: name, description: description, executablePath: executablePath, template: defaultUpstartConfig}, nil
+		},
+	},
+	{
+		name: "openwrt",
+		detected: func(root string) bool {
+			return containsAny(linuxIdentity(root), openwrtNameArr)
+		},
+		serviceDirectory: func(root string) serviceDirectory {
+			return serviceDirectory{
+				path: filepath.Join(root, "etc/init.d"),
+				isRunning: func(name string) bool {
+					_, running := (&openWrtRecord{name: name}).checkRunning()
+					return running
+				},
+			}
+		},
+		newRecord: func(name, description string, _ []string, executablePath string) (Daemon, error) {
+			return &openWrtRecord{name: name, description: description, executablePath: executablePath, template: defaultOpenWrtConfig}, nil
+		},
+	},
+	{
+		name:     "buildroot-style init",
+		detected: buildrootStyleInitDetected,
+		serviceDirectory: func(root string) serviceDirectory {
+			return serviceDirectory{
+				path:       filepath.Join(root, "etc/init.d"),
+				filePrefix: "S90",
+				isRunning: func(name string) bool {
+					_, running := (&buildrootRecord{name: name}).checkRunning()
+					return running
+				},
+			}
+		},
+		newRecord: func(name, description string, _ []string, executablePath string) (Daemon, error) {
+			return &buildrootRecord{name: name, description: description, executablePath: executablePath, template: defaultBuildrootConfig}, nil
+		},
+	},
+	{
+		name:     "systemV",
+		warning:  true,
+		detected: systemVDetected,
+		serviceDirectory: func(root string) serviceDirectory {
+			return serviceDirectory{
+				path: filepath.Join(root, "etc/init.d"),
+				isRunning: func(name string) bool {
+					_, running := (&systemVRecord{name: name}).checkRunning()
+					return running
+				},
+			}
+		},
+		newRecord: func(name, description string, _ []string, executablePath string) (Daemon, error) {
+			return &systemVRecord{name: name, description: description, executablePath: executablePath, template: defaultSystemVConfig}, nil
+		},
+	},
+}
+
 // ListServices returns user-facing names of services registered by this tool.
 func ListServices() ([]string, error) {
-	return listServiceFiles(
-		serviceDirectory{path: "/etc/systemd/system", suffix: ".service"},
-		serviceDirectory{path: "/etc/init", suffix: ".conf"},
-		serviceDirectory{path: "/etc/init.d"},
-		serviceDirectory{path: "/etc/init.d", filePrefix: "S90"},
-	)
+	return listLinuxServices("/")
+}
+
+func listLinuxServices(root string) ([]string, error) {
+	backend, err := detectLinuxBackend(root)
+	if err != nil {
+		return nil, err
+	}
+	return listServiceFiles(backend.serviceDirectory(root))
 }
 
 // ListServiceStatuses returns the status of services registered by this tool.
 func ListServiceStatuses() ([]ServiceStatus, error) {
-	return listServiceStatuses(
-		serviceDirectory{
-			path:   "/etc/systemd/system",
-			suffix: ".service",
-			isRunning: func(name string) bool {
-				_, running := (&systemDRecord{name: name}).checkRunning()
-				return running
-			},
-		},
-		serviceDirectory{
-			path:   "/etc/init",
-			suffix: ".conf",
-			isRunning: func(name string) bool {
-				_, running := (&upstartRecord{name: name}).checkRunning()
-				return running
-			},
-		},
-		serviceDirectory{
-			path: "/etc/init.d",
-			isRunning: func(name string) bool {
-				output, err := exec.Command(filepath.Join("/etc/init.d", name), "status").Output()
-				return err == nil || openWrtStatusActive(string(output), commandExitCode(err))
-			},
-		},
-		serviceDirectory{
-			path:       "/etc/init.d",
-			filePrefix: "S90",
-			isRunning: func(name string) bool {
-				return exec.Command(filepath.Join("/etc/init.d", "S90"+name), "status").Run() == nil
-			},
-		},
-	)
+	backend, err := detectLinuxBackend("/")
+	if err != nil {
+		return nil, err
+	}
+	return listServiceStatuses(backend.serviceDirectory("/"))
 }
 
 func commandExitCode(err error) int {
@@ -79,39 +177,28 @@ func commandExitCode(err error) int {
 
 // Get the daemon properly
 func newDaemon(name, description string, _ Kind, dependencies []string, executablePath string) (Daemon, error) {
-	// newer subsystem must be checked first
-	if _, err := os.Stat("/run/systemd/system"); err == nil {
-		if err := validateSystemdDependencies(dependencies); err != nil {
-			return nil, err
+	backend, err := detectLinuxBackend("/")
+	if err != nil {
+		return nil, err
+	}
+	record, err := backend.newRecord(name, description, dependencies, executablePath)
+	if err != nil {
+		return nil, err
+	}
+	if backend.warning {
+		log.Printf("[warning] using default %s type\n", backend.name)
+	} else {
+		log.Printf("[info] %s detected\n", backend.name)
+	}
+	return record, nil
+}
+
+func detectLinuxBackend(root string) (*linuxBackend, error) {
+	for index := range linuxBackends {
+		if linuxBackends[index].detected(root) {
+			return &linuxBackends[index], nil
 		}
-		log.Println("[info] systemd detected")
-		return &systemDRecord{name: name, description: description, dependencies: dependencies, executablePath: executablePath, template: defaultSystemDConfig}, nil
 	}
-	if openRCDetected("/") {
-		log.Println("[info] openrc detected")
-		return &openRCRecord{name: name, description: description, executablePath: executablePath, template: defaultOpenRCConfig}, nil
-	}
-	if _, err := os.Stat("/sbin/initctl"); err == nil {
-		log.Println("[info] upstart detected")
-		return &upstartRecord{name: name, description: description, executablePath: executablePath, template: defaultUpstartConfig}, nil
-	}
-
-	identity := linuxIdentity()
-	if containsAny(identity, openwrtNameArr) {
-		log.Println("[info] openwrt detected")
-		return &openWrtRecord{name: name, description: description, executablePath: executablePath, template: defaultOpenWrtConfig}, nil
-	}
-
-	if buildrootStyleInitDetected("/") {
-		log.Println("[info] buildroot-style init detected")
-		return &buildrootRecord{name: name, description: description, executablePath: executablePath, template: defaultBuildrootConfig}, nil
-	}
-
-	if systemVDetected("/") {
-		log.Println("[warning] using default systemV type")
-		return &systemVRecord{name: name, description: description, executablePath: executablePath, template: defaultSystemVConfig}, nil
-	}
-
 	return nil, ErrUnsupportedSystem
 }
 
@@ -151,19 +238,21 @@ func containsAny(value string, identifiers []string) bool {
 	return false
 }
 
-func linuxIdentity() string {
+func linuxIdentity(root string) string {
 	var identity strings.Builder
 	for _, path := range []string{"/etc/os-release", "/usr/lib/os-release", "/etc/openwrt_release"} {
-		content, err := os.ReadFile(path)
+		content, err := os.ReadFile(filepath.Join(root, path))
 		if err == nil {
 			identity.Write(content)
 			identity.WriteByte('\n')
 		}
 	}
 
-	output, err := exec.Command("uname", "-a").Output()
-	if err == nil {
-		identity.Write(output)
+	if filepath.Clean(root) == string(filepath.Separator) {
+		output, err := exec.Command("uname", "-a").Output()
+		if err == nil {
+			identity.Write(output)
+		}
 	}
 	return strings.ToLower(identity.String())
 }

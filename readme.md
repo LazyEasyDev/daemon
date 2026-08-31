@@ -1,20 +1,20 @@
 # DAEMON
 
-Install app as system service [support Linux, Darwin, FreeBSD and Windows]
+Install applications as system services on Linux, macOS, FreeBSD, and Windows.
 
-Precompiled files in /build
+Run `./build.sh` to compile binaries into `build/`:
 
-daemon-darwin-amd64<br />
-daemon-darwin-arm64<br />
-daemon-freebsd-amd64<br />
-daemon-freebsd-arm64<br />
-daemon-windows-amd64<br />
-daemon-windows-386<br />
-daemon-windows-arm64<br />
-daemon-linux-amd64<br />
-daemon-linux-386<br />
-daemon-linux-arm64<br />
-daemon-linux-arm32<br />
+- `daemon-darwin-amd64`
+- `daemon-darwin-arm64`
+- `daemon-freebsd-amd64`
+- `daemon-freebsd-arm64`
+- `daemon-windows-amd64.exe`
+- `daemon-windows-386.exe`
+- `daemon-windows-arm64.exe`
+- `daemon-linux-amd64`
+- `daemon-linux-386`
+- `daemon-linux-arm64`
+- `daemon-linux-arm32`
 
 ## Architecture
 
@@ -48,6 +48,7 @@ Process-group containment on OpenRC, System V, and launchd cannot stop descendan
 
 
 ## How to use
+
 1. Compile program according to the os-arch system. 
 2. Copy the compiled file into your project package and rename it to `daemon` (`daemon.exe` on Windows).
 3. Install the service using the privileges required by your platform:
@@ -56,21 +57,35 @@ Process-group containment on OpenRC, System V, and launchd cannot stop descendan
 	- Windows: use PowerShell or Command Prompt opened with **Run as administrator**. Windows Server does not require a `sudo` command.
 4. Manage it with `start`, `stop`, `restart`, `status`, or `remove` using the same privilege mode.
 
-### for example
+### For example
+
 ```
 ├─{your-project-folder}
-│  ├─configs    //cofig folder
+│  ├─configs    //config folder
 │  ├─logs       //log folder
-│  ├─assets     //assets folderr
+│  ├─assets     //assets folder
 │  ├─myapp      //executable file
 │  └─daemon    //daemon file compiled and copy from this package
 ```
 
 The service name is explicit and independent from the executable filename. It must start with an ASCII letter, contain only ASCII letters and digits, and be at most 241 characters long. A relative executable name is resolved beside the daemon binary. An executable in another folder can be installed using its absolute path.
 
-The application path must resolve to a native executable for the current operating system. Symbolic links are supported. On Linux, FreeBSD, and macOS, run a script by installing its native interpreter as the application and passing the script path as the first argument, for example `sudo ./daemon install myservice /bin/sh /opt/myservice.sh`. The executable or interpreter must remain in the foreground for the service lifetime.
+The application path must resolve to a native executable for the current operating system. Symbolic links are supported. On Linux and FreeBSD, run a script by installing its native interpreter as the application and passing the script path as the first argument, for example `sudo ./daemon install myservice /bin/sh /opt/myservice.sh`. On macOS, use the same command without `sudo`. The executable or interpreter must remain in the foreground for the service lifetime.
 
-On Windows, ordinary third-party executables are supported by default and do not need to implement the Windows SCM protocol. Use `--windows-native-service` only when the target already implements that protocol, for example by running through this package's `Daemon.Run` method.
+On Windows, ordinary third-party executables are supported by default and do not need to implement the Windows SCM protocol. Use `--windows-native-service` only when the target already implements that protocol. The CLI registers `myservice` internally as `lz_lz_myservice`, so an application using this package's `Daemon.Run` method must construct its daemon with the matching registration name:
+
+```go
+registrationName, err := daemon_util.ManagedServiceName("myservice")
+if err != nil {
+	return err
+}
+service, err := daemon_util.New(registrationName, "my service", daemon_util.SystemDaemon)
+if err != nil {
+	return err
+}
+_, err = service.Run(executable)
+return err
+```
 
 
 ### Linux and FreeBSD
@@ -144,15 +159,20 @@ myservice   running
 ```
 
 
-### in the test folder there are test apps for different architecture
+### Test applications
 
-#### example you can run on arm64 op-system
+Run `./test_app/build.sh` to compile test applications into `test_app/build/`.
+
+#### Linux ARM64 example
+
+```sh
+sudo ./daemon install apptest test_app/build/test-app-linux-arm64
 ```
-sudo ./daemon install apptest app_test-linux-arm64
-```
-#### or run on arm32(armv6,armv7,etc..) op-system
-```
-sudo ./daemon install apptest app_test-linux-arm32
+
+#### Linux ARM32 example (ARMv6, ARMv7, and compatible systems)
+
+```sh
+sudo ./daemon install apptest test_app/build/test-app-linux-arm32
 ```
 
 

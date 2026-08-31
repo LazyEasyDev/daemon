@@ -10,7 +10,6 @@ package daemon_util
 import (
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"syscall"
 	"time"
@@ -31,9 +30,8 @@ type windowsRecord struct {
 }
 
 type windowsService struct {
-	name      string
-	processID uint32
-	state     svc.State
+	name  string
+	state svc.State
 }
 
 type windowsPreshutdownInfo struct {
@@ -123,20 +121,6 @@ func ListServiceStatuses() ([]ServiceStatus, error) {
 	return sortedServiceStatuses(statuses), nil
 }
 
-func currentWindowsServiceName() (string, error) {
-	services, err := enumerateWindowsServices(winapi.SERVICE_ACTIVE)
-	if err != nil {
-		return "", err
-	}
-	processID := uint32(os.Getpid())
-	for _, service := range services {
-		if service.processID == processID {
-			return service.name, nil
-		}
-	}
-	return "", fmt.Errorf("service registration for process %d was not found", processID)
-}
-
 func enumerateWindowsServices(state uint32) ([]windowsService, error) {
 	manager, err := connectServiceManager(winapi.SC_MANAGER_CONNECT | winapi.SC_MANAGER_ENUMERATE_SERVICE)
 	if err != nil {
@@ -180,9 +164,8 @@ func enumerateWindowsServices(state uint32) ([]windowsService, error) {
 	services := make([]windowsService, 0, len(statuses))
 	for _, status := range statuses {
 		services = append(services, windowsService{
-			name:      winapi.UTF16PtrToString(status.ServiceName),
-			processID: status.ServiceStatusProcess.ProcessId,
-			state:     svc.State(status.ServiceStatusProcess.CurrentState),
+			name:  winapi.UTF16PtrToString(status.ServiceName),
+			state: svc.State(status.ServiceStatusProcess.CurrentState),
 		})
 	}
 	return services, nil

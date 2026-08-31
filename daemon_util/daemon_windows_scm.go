@@ -107,11 +107,7 @@ func (windows *windowsRecord) Run(executable Executable) (string, error) {
 		return runAction + failed, getWindowsError(err)
 	}
 	if isService {
-		serviceName, err := currentWindowsServiceName()
-		if err != nil {
-			return runAction + failed, err
-		}
-		if err := svc.Run(serviceName, &serviceHandler{executable: executable}); err != nil {
+		if err := svc.Run(windows.name, &serviceHandler{executable: executable}); err != nil {
 			return runAction + failed, getWindowsError(err)
 		}
 	} else {

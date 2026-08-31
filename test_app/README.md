@@ -65,7 +65,7 @@ The root endpoint returns the parsed configuration, original argument list, exec
 Build the daemon and test app matrices:
 
 ```sh
-./autobuild.sh
+./build.sh
 ./test_app/build.sh
 ```
 

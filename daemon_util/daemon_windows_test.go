@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 
 	winapi "golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
@@ -202,6 +203,35 @@ func TestServiceHandlerReportsChildFailure(t *testing.T) {
 	got := <-result
 	if !got.specific || got.code == 0 {
 		t.Fatalf("service result = (%t, %d), want a nonzero service-specific failure", got.specific, got.code)
+	}
+}
+
+func TestWindowsCommandStartsSuspended(t *testing.T) {
+	executable := newWindowsCommandExecutable(`C:\service.exe`)
+	if executable.command.SysProcAttr.CreationFlags&winapi.CREATE_SUSPENDED == 0 {
+		t.Fatal("wrapped Windows command must start suspended before Job Object assignment")
+	}
+}
+
+func TestWindowsKillJobTerminatesProcessesOnClose(t *testing.T) {
+	job, err := createWindowsKillJob()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer winapi.CloseHandle(job)
+
+	information := winapi.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{}
+	if err := winapi.QueryInformationJobObject(
+		job,
+		winapi.JobObjectExtendedLimitInformation,
+		uintptr(unsafe.Pointer(&information)),
+		uint32(unsafe.Sizeof(information)),
+		nil,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if information.BasicLimitInformation.LimitFlags&winapi.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE == 0 {
+		t.Fatal("Windows Job Object must terminate contained processes when closed")
 	}
 }
 

@@ -174,6 +174,7 @@ description={{shellQuote .Description}}
 command={{shellQuote .Path}}
 command_args={{shellQuote .Args}}
 supervisor=supervise-daemon
+stopgroup=true
 respawn_delay=30
 respawn_max=0
 pidfile="/run/${RC_SVCNAME}.pid"

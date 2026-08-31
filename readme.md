@@ -30,6 +30,22 @@ We considered using one shared background process to supervise every installed a
 
 This choice intentionally favors native reliability and failure isolation over identical behavior on every platform. Restart and shutdown details therefore follow the capabilities and constraints of each service manager.
 
+## Process containment
+
+The generated service configuration uses each platform's native containment where it is available:
+
+| Backend | Descendant handling on stop |
+| --- | --- |
+| Windows default mode | The per-service wrapper assigns the application to a Job Object and terminates the entire Job. |
+| Windows native-service mode | The SCM-aware application is responsible for stopping its descendants. |
+| systemd | `KillMode=control-group` stops processes remaining in the service cgroup. |
+| OpenRC | `supervise-daemon --stop-group` stops the supervised process group. |
+| System V | The application starts in a dedicated session and the script signals its process group. |
+| macOS launchd | launchd's default process-group cleanup applies. |
+| Buildroot, Upstart, OpenWrt, FreeBSD | The generated configuration adds no descendant guarantee beyond the service manager or supervisor's native behavior. |
+
+Process-group containment on OpenRC, System V, and launchd cannot stop descendants that deliberately detach into another session or process group. Applications must remain in the foreground and must not daemonize or otherwise escape native supervision. On newer OpenWrt systems, procd may provide additional cgroup containment, but the generated stop path does not depend on it.
+
 
 ## How to use
 1. Compile program according to the os-arch system. 
@@ -111,7 +127,9 @@ cd C:\path\to\your-project-folder
 .\daemon.exe remove myservice
 ```
 
-In the default mode, SCM runs `daemon.exe`, which starts the application in its executable directory and reports application startup or runtime failures to SCM. Stopping the service terminates the application process. Applications that need custom graceful shutdown handling should implement the SCM protocol and be installed with `--windows-native-service`.
+In the default mode, SCM runs `daemon.exe`, which starts the application in its executable directory and reports application startup or runtime failures to SCM. Nonzero application exits activate the configured SCM recovery actions. Stopping the service terminates the application's Job Object, including its descendants. Applications that need custom graceful shutdown handling should implement the SCM protocol and be installed with `--windows-native-service`.
+
+Windows services use the LocalSystem account by default. Keep `daemon.exe`, the target executable, scripts, and their containing directories writable only by trusted administrators; otherwise an unprivileged user could replace code that SCM executes as LocalSystem.
 
 `--stop-timeout` defaults to `600s` and accepts positive, whole-second Go duration values such as `45s` or `10m`. On Unix platforms, set it during `install` so the generated service configuration waits up to that duration before forcing termination. On Windows, the install value configures how long SCM allows the service to finish preshutdown cleanup during an operating-system shutdown or reboot. The option must appear before the executable because arguments after the executable belong to the application.
 

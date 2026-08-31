@@ -260,8 +260,14 @@ is_expected_process() {
 	[ "$exec" -ef "/proc/$pid/exe" ]
 }
 
+is_process_group_running() {
+	read_pid || return 1
+	kill -0 -- "-$pid" 2>/dev/null
+}
+
 start() {
 	[ -x "$exec" ] || exit 5
+	command -v setsid >/dev/null 2>&1 || exit 5
 
 	if [ -f "$pidfile" ]; then
 		if read_pid && ! is_expected_process && ! kill -0 "$pid" 2>/dev/null; then
@@ -274,7 +280,7 @@ start() {
 
 	if ! [ -f "$pidfile" ]; then
 		printf 'Starting %s:\t' "$servname"
-		"$exec" {{.Args}} >/dev/null 2>&1 &
+		setsid "$exec" {{.Args}} >/dev/null 2>&1 &
 		pid=$!
 		printf '%s\n' "$pid" > "$pidfile"
 		sleep 1
@@ -312,26 +318,26 @@ stop() {
 		echo "FAIL"
 		return 1
 	fi
-	if ! kill -TERM "$pid" 2>/dev/null; then
+	if ! kill -TERM -- "-$pid" 2>/dev/null; then
 		echo "FAIL"
 		return 1
 	fi
 
 	elapsed=0
-	while is_expected_process && [ "$elapsed" -lt "$stop_timeout" ]; do
+	while is_process_group_running && [ "$elapsed" -lt "$stop_timeout" ]; do
 		sleep 1
 		elapsed=$((elapsed + 1))
 	done
-	if is_expected_process && ! kill -KILL "$pid" 2>/dev/null; then
+	if is_process_group_running && ! kill -KILL -- "-$pid" 2>/dev/null; then
 		echo "FAIL"
 		return 1
 	fi
 	force_elapsed=0
-	while is_expected_process && [ "$force_elapsed" -lt 5 ]; do
+	while is_process_group_running && [ "$force_elapsed" -lt 5 ]; do
 		sleep 1
 		force_elapsed=$((force_elapsed + 1))
 	done
-	if is_expected_process || kill -0 "$pid" 2>/dev/null; then
+	if is_process_group_running; then
 		echo "FAIL"
 		return 1
 	fi

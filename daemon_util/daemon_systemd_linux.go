@@ -229,6 +229,7 @@ ExecStart={{systemdQuote .Path}} {{.Args}}
 Restart=on-failure
 RestartSec=20s
 TimeoutStopSec={{.StopTimeoutSeconds}}s
+KillMode=control-group
 
 [Install]
 WantedBy=multi-user.target

@@ -63,6 +63,7 @@ func TestOpenWrtRespawnsWithoutRetryLimit(t *testing.T) {
 func TestOpenRCRespawnsWithoutRetryLimit(t *testing.T) {
 	for _, setting := range []string{
 		"supervisor=supervise-daemon",
+		"stopgroup=true",
 		"respawn_delay=30",
 		"respawn_max=0",
 	} {
@@ -124,6 +125,12 @@ func TestSystemDStatusActive(t *testing.T) {
 	}
 }
 
+func TestSystemDStopsControlGroup(t *testing.T) {
+	if !strings.Contains(defaultSystemDConfig, "KillMode=control-group") {
+		t.Fatal("systemd config must stop the entire service control group")
+	}
+}
+
 func TestOpenWrtStatusActive(t *testing.T) {
 	tests := []struct {
 		status   string
@@ -166,7 +173,10 @@ func TestSystemVValidatesProcessBeforeSignals(t *testing.T) {
 		`[ "$pid" -gt 1 ]`,
 		`[ "$exec" -ef "/proc/$pid/exe" ]`,
 		`if ! is_expected_process; then`,
-		`if is_expected_process && ! kill -KILL "$pid"`,
+		`setsid "$exec"`,
+		`kill -TERM -- "-$pid"`,
+		`if is_process_group_running && ! kill -KILL -- "-$pid"`,
+		`while is_process_group_running && [ "$elapsed" -lt "$stop_timeout" ]`,
 	} {
 		if !strings.Contains(defaultSystemVConfig, command) {
 			t.Fatalf("System V config does not contain %q", command)
@@ -174,6 +184,9 @@ func TestSystemVValidatesProcessBeforeSignals(t *testing.T) {
 	}
 	if strings.Contains(defaultSystemVConfig, `while kill -0 "$pid"`) {
 		t.Fatal("System V stop loop still trusts raw PID liveness")
+	}
+	if strings.Contains(defaultSystemVConfig, `kill -KILL "$pid"`) {
+		t.Fatal("System V stop still kills only the main process")
 	}
 	if strings.Contains(defaultSystemVConfig, `/proc/$pid/cmdline`) {
 		t.Fatal("System V config still contains script-specific process matching")

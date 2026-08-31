@@ -255,6 +255,16 @@ func (windows *windowsRecord) Install(args ...string) (string, error) {
 		}
 		return installAction + failed, recoveryErr
 	}
+	if err := s.SetRecoveryActionsOnNonCrashFailures(true); err != nil {
+		recoveryErr := getWindowsError(err)
+		if rollbackErr := s.Delete(); rollbackErr != nil {
+			return installAction + failed, errors.Join(
+				recoveryErr,
+				fmt.Errorf("rollback service creation: %w", getWindowsError(rollbackErr)),
+			)
+		}
+		return installAction + failed, recoveryErr
+	}
 	if err := setWindowsPreshutdownTimeout(s, windows.stopTimeoutDuration()); err != nil {
 		preshutdownErr := getWindowsError(err)
 		if rollbackErr := s.Delete(); rollbackErr != nil {

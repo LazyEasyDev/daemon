@@ -36,8 +36,7 @@ The generated service configuration uses each platform's native containment wher
 
 | Backend | Descendant handling on stop |
 | --- | --- |
-| Windows default mode | The per-service wrapper assigns the application to a Job Object and terminates the entire Job. |
-| Windows native-service mode | The SCM-aware application is responsible for stopping its descendants. |
+| Windows | The per-service wrapper signals the application's console process group, then terminates its Job Object if the stop timeout expires. |
 | systemd | `KillMode=control-group` stops processes remaining in the service cgroup. |
 | OpenRC | `supervise-daemon --stop-group` stops the supervised process group. |
 | System V | The application starts in a dedicated session and the script signals its process group. |
@@ -70,22 +69,13 @@ Process-group containment on OpenRC, System V, and launchd cannot stop descendan
 
 The service name is explicit and independent from the executable filename. It must start with an ASCII letter, contain only ASCII letters and digits, and be at most 241 characters long. A relative executable name is resolved beside the daemon binary. An executable in another folder can be installed using its absolute path.
 
-The application path must resolve to a native executable for the current operating system. Symbolic links are supported. On Linux and FreeBSD, run a script by installing its native interpreter as the application and passing the script path as the first argument, for example `sudo ./daemon install myservice /bin/sh /opt/myservice.sh`. On macOS, use the same command without `sudo`. The executable or interpreter must remain in the foreground for the service lifetime.
+The application path must resolve to a native executable for the current operating system. Symbolic links are resolved during installation; dangling links, link loops, and missing path components cause installation to fail. The resolved absolute path is registered with the service manager, so changing the original link does not change the installed service. On Linux and FreeBSD, run a script by installing its native interpreter as the application and passing the script path as the first argument, for example `sudo ./daemon install myservice /bin/sh /opt/myservice.sh`. On macOS, use the same command without `sudo`. The executable or interpreter must remain in the foreground for the service lifetime.
 
-On Windows, ordinary third-party executables are supported by default and do not need to implement the Windows SCM protocol. Use `--windows-native-service` only when the target already implements that protocol. The CLI registers `myservice` internally as `lz_lz_myservice`, so an application using this package's `Daemon.Run` method must construct its daemon with the matching registration name:
+Every backend starts the application with the resolved executable's containing directory as its initial working directory. Relative application arguments are therefore resolved from that directory unless the application changes its own working directory before using them.
 
-```go
-registrationName, err := daemon_util.ManagedServiceName("myservice")
-if err != nil {
-	return err
-}
-service, err := daemon_util.New(registrationName, "my service", daemon_util.SystemDaemon)
-if err != nil {
-	return err
-}
-_, err = service.Run(executable)
-return err
-```
+On OpenWrt, the generated procd configuration uses a short shell launcher to change to that directory before starting the application. The executable and each application argument are passed as separate positional values, so spaces and shell characters remain literal and require no special handling. The launcher then uses `exec` to replace itself with the application; the PID, signals, exit status, respawn behavior, and procd supervision therefore remain attached directly to the application.
+
+On Windows, applications are hosted by the `daemon-util` wrapper and do not need to implement the Windows SCM protocol. The wrapper treats the target as a console application. To perform graceful cleanup, the application must handle `CTRL_BREAK_EVENT`; Go applications receive it as `os.Interrupt` through `os/signal`. GUI applications and descendants that create a separate console or process group are not supported.
 
 
 ### Linux and FreeBSD
@@ -132,23 +122,19 @@ cd C:\path\to\your-project-folder
 
 .\daemon.exe install myservice .\myapp.exe [arg1] [arg2] ...
 .\daemon.exe install --stop-timeout 5m myservice .\myapp.exe [arg1] [arg2] ...
-.\daemon.exe install --windows-native-service myservice .\scm-aware-app.exe [arg1] [arg2] ...
 .\daemon.exe list
 .\daemon.exe start myservice
 .\daemon.exe status myservice
 .\daemon.exe restart myservice
 .\daemon.exe stop myservice
-.\daemon.exe stop --stop-timeout 45s myservice
 .\daemon.exe remove myservice
 ```
 
-In the default mode, SCM runs `daemon.exe`, which starts the application in its executable directory and reports application startup or runtime failures to SCM. Nonzero application exits activate the configured SCM recovery actions. Stopping the service terminates the application's Job Object, including its descendants. Applications that need custom graceful shutdown handling should implement the SCM protocol and be installed with `--windows-native-service`.
+On Windows, SCM runs `daemon.exe`, which starts the application and reports application startup or runtime failures to SCM. Nonzero application exits activate the configured SCM recovery actions. Stopping the service sends `CTRL_BREAK_EVENT` to the application's console process group and waits for it to exit. If delivery fails or the installed stop timeout expires, the wrapper terminates the application's Job Object, including its descendants.
 
 Windows services use the LocalSystem account by default. Keep `daemon.exe`, the target executable, scripts, and their containing directories writable only by trusted administrators; otherwise an unprivileged user could replace code that SCM executes as LocalSystem.
 
-`--stop-timeout` defaults to `600s` and accepts positive, whole-second Go duration values such as `45s` or `10m`. On Unix platforms, set it during `install` so the generated service configuration waits up to that duration before forcing termination. On Windows, the install value configures how long SCM allows the service to finish preshutdown cleanup during an operating-system shutdown or reboot. The option must appear before the executable because arguments after the executable belong to the application.
-
-On Windows, `--stop-timeout` on `stop`, `restart`, or `remove` separately controls how long this tool waits for SCM to report `STOPPED`. A timeout from one of these commands returns an error and does not terminate the service process.
+`--stop-timeout` defaults to `600s` and accepts positive, whole-second Go duration values such as `45s` or `10m`. Set it during `install`; on Unix platforms, the generated service configuration waits up to that duration before forcing termination. On Windows, the value is stored in SCM, controls how long the wrapper waits after `CTRL_BREAK_EVENT`, and configures the preshutdown allowance during an operating-system shutdown or reboot. Stop, restart, and remove operations read the installed value from SCM while waiting for the service to report `STOPPED`. The option must appear before the executable because arguments after the executable belong to the application.
 
 `list` and `ls` show each managed service, its current status, and the configured application path:
 
@@ -158,7 +144,7 @@ api         stopped  /opt/api
 myservice   running  /opt/myservice/current
 ```
 
-The application path is informational and preserves the path supplied during installation, including a symbolic link. Metadata is stored in the platform application-data directory and does not control service operations. If metadata cannot be written or read, or is malformed, installation and listing still succeed and the `APP` column is blank for that service. Removing a service also removes its metadata on a best-effort basis.
+The application path is informational and records the same resolved absolute path registered with the service manager. Metadata is stored in the platform application-data directory and does not control service operations. If metadata cannot be written or read, or is malformed, installation and listing still succeed and the `APP` column is blank for that service. Removing a service also removes its metadata on a best-effort basis.
 
 
 ### Test applications

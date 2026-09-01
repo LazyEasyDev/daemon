@@ -9,6 +9,7 @@ package daemon_util
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"text/template"
 )
@@ -86,14 +87,15 @@ func (linux *systemDRecord) Install(args ...string) (string, error) {
 		linux.template,
 		funcs,
 		&struct {
-			Name, Description, Dependencies, Path, Args string
-			StopTimeoutSeconds                          int64
+			Name, Description, Dependencies, Path, Args, WorkingDirectory string
+			StopTimeoutSeconds                                            int64
 		}{
 			linux.name,
 			linux.description,
 			systemdConfigQuoteArgs(linux.dependencies),
 			execPatch,
 			systemdQuoteArgs(args),
+			filepath.Dir(execPatch),
 			linux.stopTimeoutSeconds(),
 		},
 		0644,
@@ -226,6 +228,7 @@ After={{.Dependencies}}
 [Service]
 Type=exec
 ExecStart={{systemdQuote .Path}} {{.Args}}
+WorkingDirectory={{systemdConfigQuote .WorkingDirectory}}
 Restart=on-failure
 RestartSec=20s
 TimeoutStopSec={{.StopTimeoutSeconds}}s

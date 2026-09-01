@@ -69,10 +69,24 @@ func resolveExecutablePath(name, configuredPath string) (string, error) {
 		}
 		path = filepath.Join(filepath.Dir(executable), name)
 	}
-	if err := validateExecutable(path); err != nil {
+	return ResolveExecutablePath(path)
+}
+
+// ResolveExecutablePath returns the absolute, symlink-resolved path to a
+// native executable for the current operating system.
+func ResolveExecutablePath(path string) (string, error) {
+	absolutePath, err := filepath.Abs(path)
+	if err != nil {
 		return "", err
 	}
-	return path, nil
+	resolvedPath, err := filepath.EvalSymlinks(absolutePath)
+	if err != nil {
+		return "", err
+	}
+	if err := validateExecutable(resolvedPath); err != nil {
+		return "", err
+	}
+	return resolvedPath, nil
 }
 
 // ValidateExecutablePath verifies that path identifies a native executable for
@@ -200,6 +214,10 @@ func shellQuote(value string) string {
 
 func shellQuoteArgs(args []string) string {
 	return quoteArgs(args, shellQuote)
+}
+
+func upstartQuote(value string) string {
+	return strconv.Quote(value)
 }
 
 func systemdQuote(value string) string {

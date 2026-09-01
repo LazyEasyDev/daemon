@@ -27,4 +27,7 @@ func TestLaunchdTemplateConfiguresStopTimeout(t *testing.T) {
 	if !strings.Contains(output.String(), "<key>ExitTimeOut</key>\n\t<integer>45</integer>") {
 		t.Fatal("rendered property list does not configure a 45-second ExitTimeOut")
 	}
+	if !strings.Contains(output.String(), "<key>WorkingDirectory</key>\n\t<string>/opt</string>") {
+		t.Fatal("rendered property list does not configure the executable directory")
+	}
 }

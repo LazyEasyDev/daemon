@@ -9,6 +9,7 @@ package daemon_util
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"text/template"
 )
@@ -50,10 +51,7 @@ func (linux *openWrtRecord) checkRunning() (string, bool) {
 
 func openWrtStatusActive(status string, exitCode int) bool {
 	status = strings.TrimSpace(status)
-	if exitCode == 0 {
-		return status == "running" || strings.HasPrefix(status, "running (")
-	}
-	return exitCode == 5 && status == "not running"
+	return exitCode == 0 && (status == "running" || strings.HasPrefix(status, "running ("))
 }
 
 // Install the service
@@ -84,9 +82,9 @@ func (linux *openWrtRecord) Install(args ...string) (string, error) {
 		linux.template,
 		funcs,
 		&struct {
-			Name, Description, Path, Args string
-			StopTimeoutSeconds            int64
-		}{linux.name, linux.description, execPatch, shellQuoteArgs(args), linux.stopTimeoutSeconds()},
+			Name, Description, Path, Args, WorkingDirectory string
+			StopTimeoutSeconds                              int64
+		}{linux.name, linux.description, execPatch, shellQuoteArgs(args), filepath.Dir(execPatch), linux.stopTimeoutSeconds()},
 		0755,
 	); err != nil {
 		return installAction + failed, err
@@ -218,6 +216,7 @@ USE_PROCD=1
 
 DAEMON={{shellQuote .Name}}
 PROG={{shellQuote .Path}}
+WORKING_DIRECTORY={{shellQuote .WorkingDirectory}}
 
 start_service() {
 	echo "start ${DAEMON} service!"
@@ -229,8 +228,8 @@ start_service() {
 	procd_set_param respawn 0 30 0
 	procd_set_param term_timeout {{.StopTimeoutSeconds}}
 	
-	# run 
-	procd_set_param command "$PROG" {{.Args}}
+	# run
+	procd_set_param command /bin/sh -c 'cd "$1" && shift && exec "$@"' sh "$WORKING_DIRECTORY" "$PROG" {{.Args}}
 
 	procd_close_instance
 }

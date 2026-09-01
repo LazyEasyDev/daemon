@@ -5,6 +5,7 @@ package daemon_util
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -207,9 +208,53 @@ func TestServiceHandlerReportsChildFailure(t *testing.T) {
 }
 
 func TestWindowsCommandStartsSuspended(t *testing.T) {
-	executable := newWindowsCommandExecutable(`C:\service.exe`)
+	path := `C:\service.exe`
+	executable := newWindowsCommandExecutable(path, DefaultStopTimeout)
 	if executable.command.SysProcAttr.CreationFlags&winapi.CREATE_SUSPENDED == 0 {
 		t.Fatal("wrapped Windows command must start suspended before Job Object assignment")
+	}
+	if executable.command.SysProcAttr.CreationFlags&winapi.CREATE_NEW_PROCESS_GROUP == 0 {
+		t.Fatal("wrapped Windows command must start in a console process group")
+	}
+	if executable.command.Dir != filepath.Dir(path) {
+		t.Fatalf("working directory = %q, want %q", executable.command.Dir, filepath.Dir(path))
+	}
+}
+
+func TestWaitForWindowsProcessGroupStopSendsBreakAndWaitsForExit(t *testing.T) {
+	done := make(chan error, 1)
+	done <- nil
+	var event uint32
+	var processGroupID uint32
+	stopped := waitForWindowsProcessGroupStop(42, done, time.Second, func(gotEvent, gotProcessGroupID uint32) error {
+		event = gotEvent
+		processGroupID = gotProcessGroupID
+		return nil
+	})
+	if !stopped {
+		t.Fatal("process group did not stop after CTRL+BREAK")
+	}
+	if event != winapi.CTRL_BREAK_EVENT || processGroupID != 42 {
+		t.Fatalf("console event = (%d, %d), want (%d, 42)", event, processGroupID, winapi.CTRL_BREAK_EVENT)
+	}
+}
+
+func TestWaitForWindowsProcessGroupStopFallsBackOnDeliveryFailure(t *testing.T) {
+	deliveryErr := errors.New("delivery failed")
+	stopped := waitForWindowsProcessGroupStop(42, make(chan error), time.Second, func(uint32, uint32) error {
+		return deliveryErr
+	})
+	if stopped {
+		t.Fatal("process group reported stopped after CTRL+BREAK delivery failure")
+	}
+}
+
+func TestWaitForWindowsProcessGroupStopFallsBackAfterTimeout(t *testing.T) {
+	stopped := waitForWindowsProcessGroupStop(42, make(chan error), time.Millisecond, func(uint32, uint32) error {
+		return nil
+	})
+	if stopped {
+		t.Fatal("process group reported stopped before graceful-stop timeout")
 	}
 }
 

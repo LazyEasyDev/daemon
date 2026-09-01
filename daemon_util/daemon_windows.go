@@ -92,6 +92,36 @@ func setWindowsPreshutdownTimeout(service *mgr.Service, timeout time.Duration) e
 	)
 }
 
+func getWindowsPreshutdownTimeout(service *mgr.Service) (time.Duration, error) {
+	var info windowsPreshutdownInfo
+	var bytesNeeded uint32
+	if err := winapi.QueryServiceConfig2(
+		service.Handle,
+		winapi.SERVICE_CONFIG_PRESHUTDOWN_INFO,
+		(*byte)(unsafe.Pointer(&info)),
+		uint32(unsafe.Sizeof(info)),
+		&bytesNeeded,
+	); err != nil {
+		return 0, err
+	}
+	return time.Duration(info.timeoutMilliseconds) * time.Millisecond, nil
+}
+
+func getWindowsServicePreshutdownTimeout(name string) (time.Duration, error) {
+	manager, err := connectServiceManager(winapi.SC_MANAGER_CONNECT)
+	if err != nil {
+		return 0, err
+	}
+	defer manager.Disconnect()
+
+	service, err := openWindowsService(manager, name, winapi.SERVICE_QUERY_CONFIG)
+	if err != nil {
+		return 0, err
+	}
+	defer service.Close()
+	return getWindowsPreshutdownTimeout(service)
+}
+
 // ListServices returns user-facing names of services registered by this tool.
 func ListServices() ([]string, error) {
 	services, err := enumerateWindowsServices(winapi.SERVICE_STATE_ALL)
@@ -317,12 +347,16 @@ func (windows *windowsRecord) Stop() (string, error) {
 		return stopAction + failed, getWindowsError(err)
 	}
 	defer m.Disconnect()
-	s, err := openWindowsService(m, windows.name, winapi.SERVICE_STOP|winapi.SERVICE_QUERY_STATUS)
+	s, err := openWindowsService(m, windows.name, winapi.SERVICE_STOP|winapi.SERVICE_QUERY_STATUS|winapi.SERVICE_QUERY_CONFIG)
 	if err != nil {
 		return stopAction + failed, getWindowsError(err)
 	}
 	defer s.Close()
-	if err := stopAndWait(s, windows.stopTimeoutDuration()); err != nil {
+	timeout, err := getWindowsPreshutdownTimeout(s)
+	if err != nil {
+		return stopAction + failed, getWindowsError(err)
+	}
+	if err := stopAndWait(s, timeout); err != nil {
 		return stopAction + failed, getWindowsError(err)
 	}
 
@@ -352,7 +386,7 @@ func stopAndWait(service serviceController, timeout time.Duration) error {
 		}
 	}
 
-	_, err = waitForServiceState(service, svc.Stopped, timeout+100*time.Millisecond)
+	_, err = waitForServiceState(service, svc.Stopped, timeout+windowsPendingWaitHint)
 	return err
 }
 

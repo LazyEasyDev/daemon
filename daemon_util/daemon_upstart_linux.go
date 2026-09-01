@@ -9,6 +9,7 @@ package daemon_util
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"text/template"
 )
@@ -77,7 +78,8 @@ func (linux *upstartRecord) Install(args ...string) (string, error) {
 	}
 
 	funcs := template.FuncMap{
-		"shellQuote": shellQuote,
+		"shellQuote":   shellQuote,
+		"upstartQuote": upstartQuote,
 	}
 	if err := writeTemplateFile(
 		srvPath,
@@ -85,9 +87,9 @@ func (linux *upstartRecord) Install(args ...string) (string, error) {
 		linux.template,
 		funcs,
 		&struct {
-			Name, Description, Path, Args string
-			StopTimeoutSeconds            int64
-		}{linux.name, linux.description, execPatch, shellQuoteArgs(args), linux.stopTimeoutSeconds()},
+			Name, Description, Path, Args, WorkingDirectory string
+			StopTimeoutSeconds                              int64
+		}{linux.name, linux.description, execPatch, shellQuoteArgs(args), filepath.Dir(execPatch), linux.stopTimeoutSeconds()},
 		0644,
 	); err != nil {
 		return installAction + failed, err
@@ -205,6 +207,7 @@ stop on runlevel [016]
 respawn
 respawn limit 0 5
 kill timeout {{.StopTimeoutSeconds}}
+chdir {{upstartQuote .WorkingDirectory}}
 
 exec {{shellQuote .Path}} {{.Args}}
 `

@@ -26,7 +26,7 @@ func newCommand() *cli.Command {
 			Usage:        "install app as system service",
 			ArgsUsage:    "<service-name> <app-or-absolute-path> [app arguments...]",
 			StopOnNthArg: &stopAfterInstallTarget,
-			Flags:        installCommandFlags(),
+			Flags:        []cli.Flag{stopTimeoutFlag()},
 			Action:       install,
 		},
 		{
@@ -38,7 +38,6 @@ func newCommand() *cli.Command {
 		{
 			Name:   "remove",
 			Usage:  "remove app from system service",
-			Flags:  stopCommandFlags(),
 			Action: remove,
 		},
 		{
@@ -49,13 +48,11 @@ func newCommand() *cli.Command {
 		{
 			Name:   "stop",
 			Usage:  "stop app",
-			Flags:  stopCommandFlags(),
 			Action: stop,
 		},
 		{
 			Name:   "restart",
 			Usage:  "restart app",
-			Flags:  stopCommandFlags(),
 			Action: restart,
 		},
 		{

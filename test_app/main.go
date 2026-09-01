@@ -19,13 +19,12 @@ import (
 )
 
 type config struct {
-	Enabled              bool          `json:"enabled"`
-	Message              string        `json:"message"`
-	Count                int           `json:"count"`
-	Port                 int           `json:"port"`
-	StopAfter            time.Duration `json:"stop_after"`
-	StopDelay            time.Duration `json:"stop_delay"`
-	WindowsNativeService bool          `json:"windows_native_service"`
+	Enabled   bool          `json:"enabled"`
+	Message   string        `json:"message"`
+	Count     int           `json:"count"`
+	Port      int           `json:"port"`
+	StopAfter time.Duration `json:"stop_after"`
+	StopDelay time.Duration `json:"stop_delay"`
 }
 
 var errStopAfter = errors.New("configured stop-after elapsed")
@@ -65,7 +64,6 @@ func parseConfig(args []string) (config, error) {
 	flags.IntVar(&cfg.Port, "port", 18080, "HTTP listen port")
 	flags.DurationVar(&cfg.StopAfter, "stop-after", 0, "stop with a failure after this duration")
 	flags.DurationVar(&cfg.StopDelay, "stop_delay", 0, "delay graceful shutdown after a stop request")
-	flags.BoolVar(&cfg.WindowsNativeService, "windows-native-service", false, "run using the Windows SCM protocol")
 	if err := flags.Parse(args); err != nil {
 		return config{}, err
 	}
@@ -257,7 +255,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	if err := runApplication(newApplication(cfg, args, executable), cfg.WindowsNativeService); err != nil {
+	if err := newApplication(cfg, args, executable).run(); err != nil {
 		log.Fatal(err)
 	}
 }

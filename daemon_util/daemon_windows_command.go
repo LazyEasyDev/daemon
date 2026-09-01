@@ -3,30 +3,38 @@
 package daemon_util
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 
 	winapi "golang.org/x/sys/windows"
 )
 
+var allocConsoleProc = winapi.NewLazySystemDLL("kernel32.dll").NewProc("AllocConsole")
+
 type windowsCommandExecutable struct {
-	command *exec.Cmd
-	done    chan error
-	jobMu   sync.Mutex
-	job     winapi.Handle
+	command     *exec.Cmd
+	stopTimeout time.Duration
+	done        chan error
+	jobMu       sync.Mutex
+	job         winapi.Handle
 }
 
-func newWindowsCommandExecutable(path string, args ...string) *windowsCommandExecutable {
+func newWindowsCommandExecutable(path string, stopTimeout time.Duration, args ...string) *windowsCommandExecutable {
 	command := exec.Command(path, args...)
 	command.Dir = filepath.Dir(path)
-	command.SysProcAttr = &syscall.SysProcAttr{CreationFlags: winapi.CREATE_SUSPENDED}
+	command.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags: winapi.CREATE_SUSPENDED | winapi.CREATE_NEW_PROCESS_GROUP,
+	}
 	return &windowsCommandExecutable{
-		command: command,
-		done:    make(chan error, 1),
+		command:     command,
+		stopTimeout: stopTimeout,
+		done:        make(chan error, 1),
 	}
 }
 
@@ -40,6 +48,11 @@ func (executable *windowsCommandExecutable) Start() {
 	executable.job = job
 	executable.jobMu.Unlock()
 
+	if err := allocWindowsConsole(); err != nil && !errors.Is(err, winapi.ERROR_ACCESS_DENIED) {
+		executable.closeJob()
+		executable.done <- fmt.Errorf("allocate child process console: %w", err)
+		return
+	}
 	if err := executable.command.Start(); err != nil {
 		executable.closeJob()
 		executable.done <- err
@@ -59,7 +72,39 @@ func (executable *windowsCommandExecutable) Start() {
 	}()
 }
 
+func allocWindowsConsole() error {
+	result, _, err := allocConsoleProc.Call()
+	if result != 0 {
+		return nil
+	}
+	return err
+}
+
 func (executable *windowsCommandExecutable) Stop() {
+	if executable.command.Process != nil {
+		processGroupID := uint32(executable.command.Process.Pid)
+		if waitForWindowsProcessGroupStop(processGroupID, executable.done, executable.stopTimeout, winapi.GenerateConsoleCtrlEvent) {
+			return
+		}
+	}
+	executable.terminateJob()
+}
+
+func waitForWindowsProcessGroupStop(processGroupID uint32, done <-chan error, timeout time.Duration, generateConsoleCtrlEvent func(uint32, uint32) error) bool {
+	if err := generateConsoleCtrlEvent(winapi.CTRL_BREAK_EVENT, processGroupID); err != nil {
+		return false
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
+func (executable *windowsCommandExecutable) terminateJob() {
 	executable.jobMu.Lock()
 	defer executable.jobMu.Unlock()
 	if executable.job != 0 {
@@ -155,5 +200,9 @@ func (executable *windowsCommandExecutable) Done() <-chan error {
 // Service Control Manager protocol.
 func RunWindowsCommandService(name, description, path string, args ...string) (string, error) {
 	service := &windowsRecord{name: name, description: description}
-	return service.Run(newWindowsCommandExecutable(path, args...))
+	stopTimeout, err := getWindowsServicePreshutdownTimeout(name)
+	if err != nil {
+		return "Running " + description + ":" + failed, getWindowsError(err)
+	}
+	return service.Run(newWindowsCommandExecutable(path, stopTimeout, args...))
 }

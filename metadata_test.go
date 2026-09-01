@@ -6,26 +6,31 @@ import (
 	"testing"
 )
 
-func TestServiceMetadataPreservesConfiguredSymlinkPath(t *testing.T) {
+func TestServiceMetadataStoresResolvedApplicationPath(t *testing.T) {
 	directory := t.TempDir()
-	target := filepath.Join(directory, "releases", "worker")
-	if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+	executable, err := os.Executable()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(target, []byte("worker"), 0755); err != nil {
+	target, err := filepath.EvalSymlinks(executable)
+	if err != nil {
 		t.Fatal(err)
 	}
 	link := filepath.Join(directory, "current worker")
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
-
-	metadataDirectory := filepath.Join(directory, "metadata")
-	if err := writeServiceMetadataTo(metadataDirectory, "worker", link); err != nil {
+	resolved, err := executablePathFromTarget(link)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if got := readServiceMetadataFrom(metadataDirectory, "worker"); got != link {
-		t.Fatalf("application path = %q, want configured symlink %q", got, link)
+
+	metadataDirectory := filepath.Join(directory, "metadata")
+	if err := writeServiceMetadataTo(metadataDirectory, "worker", resolved); err != nil {
+		t.Fatal(err)
+	}
+	if got := readServiceMetadataFrom(metadataDirectory, "worker"); got != target {
+		t.Fatalf("application path = %q, want resolved destination %q", got, target)
 	}
 
 	metadataPath := filepath.Join(metadataDirectory, "lz_lz_worker.json")

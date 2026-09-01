@@ -13,25 +13,7 @@ import (
 
 const windowsServiceCommand = "run-windows-service"
 
-func installCommandFlags() []cli.Flag {
-	return []cli.Flag{
-		stopTimeoutFlag(),
-		&cli.BoolFlag{
-			Name:  "windows-native-service",
-			Usage: "install an application that implements the Windows SCM protocol",
-		},
-	}
-}
-
-func stopCommandFlags() []cli.Flag {
-	return []cli.Flag{stopTimeoutFlag()}
-}
-
 func configuredInstallService(command *cli.Command, serviceName, executablePath string) (daemon_util.Daemon, []string, error) {
-	if command.Bool("windows-native-service") {
-		service, err := configuredService(command, serviceName, executablePath)
-		return service, nil, err
-	}
 	if err := daemon_util.ValidateExecutablePath(executablePath); err != nil {
 		return nil, nil, err
 	}

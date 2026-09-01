@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"text/template"
 )
@@ -128,9 +129,9 @@ func (bsd *bsdRecord) Install(args ...string) (string, error) {
 		bsd.template,
 		funcs,
 		&struct {
-			Name, RCName, RCVar, Description, Path, Args string
-			StopTimeoutSeconds                           int64
-		}{bsd.name, bsd.name, bsd.name + "_enable", bsd.description, execPatch, shellQuoteArgs(args), bsd.stopTimeoutSeconds()},
+			Name, RCName, RCVar, Description, Path, Args, WorkingDirectory string
+			StopTimeoutSeconds                                             int64
+		}{bsd.name, bsd.name, bsd.name + "_enable", bsd.description, execPatch, shellQuoteArgs(args), filepath.Dir(execPatch), bsd.stopTimeoutSeconds()},
 		0755,
 	); err != nil {
 		return installAction + failed, err
@@ -262,6 +263,7 @@ name={{shellQuote .RCName}}
 rcvar={{shellQuote .RCVar}}
 command="/usr/sbin/daemon"
 app_command={{shellQuote .Path}}
+app_directory={{shellQuote .WorkingDirectory}}
 pidfile="/var/run/$name.pid"
 child_pidfile="/var/run/$name.child.pid"
 stop_timeout={{.StopTimeoutSeconds}}
@@ -270,6 +272,7 @@ start_cmd="daemon_start"
 stop_cmd="daemon_stop"
 daemon_start()
 {
+	cd "$app_directory" || return 1
 	"$command" -R 30 -P "$pidfile" -p "$child_pidfile" -f "$app_command" {{.Args}}
 }
 daemon_stop()

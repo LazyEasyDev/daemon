@@ -5,6 +5,7 @@ package daemon_util
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,13 +14,14 @@ import (
 
 func TestLinuxTemplatesConfigureStopTimeout(t *testing.T) {
 	data := struct {
-		Name, Description, Dependencies, Path, Args string
-		StopTimeoutSeconds                          int64
-	}{"worker", "worker", "", "/opt/worker", "", 45}
+		Name, Description, Dependencies, Path, Args, WorkingDirectory string
+		StopTimeoutSeconds                                            int64
+	}{"worker", "worker", "", "/opt/worker", "", "/opt", 45}
 	funcs := template.FuncMap{
 		"shellQuote":         shellQuote,
 		"systemdQuote":       systemdQuote,
 		"systemdConfigQuote": systemdConfigQuote,
+		"upstartQuote":       upstartQuote,
 	}
 	tests := []struct {
 		name   string
@@ -48,6 +50,84 @@ func TestLinuxTemplatesConfigureStopTimeout(t *testing.T) {
 				t.Fatalf("rendered template does not contain %q", test.want)
 			}
 		})
+	}
+}
+
+func TestLinuxTemplatesConfigureWorkingDirectory(t *testing.T) {
+	workingDirectory := "/opt/worker's files"
+	data := struct {
+		Name, Description, Dependencies, Path, Args, WorkingDirectory string
+		StopTimeoutSeconds                                            int64
+	}{"worker", "worker", "", workingDirectory + "/worker", shellQuoteArgs([]string{"argument with spaces"}), workingDirectory, 45}
+	funcs := template.FuncMap{
+		"shellQuote":         shellQuote,
+		"systemdQuote":       systemdQuote,
+		"systemdConfigQuote": systemdConfigQuote,
+		"upstartQuote":       upstartQuote,
+	}
+	tests := []struct {
+		name   string
+		source string
+		wants  []string
+	}{
+		{name: "systemd", source: defaultSystemDConfig, wants: []string{"WorkingDirectory=" + systemdConfigQuote(workingDirectory)}},
+		{name: "OpenRC", source: defaultOpenRCConfig, wants: []string{"directory=" + shellQuote(workingDirectory)}},
+		{name: "OpenWrt", source: defaultOpenWrtConfig, wants: []string{
+			"WORKING_DIRECTORY=" + shellQuote(workingDirectory),
+			`procd_set_param command /bin/sh -c 'cd "$1" && shift && exec "$@"' sh "$WORKING_DIRECTORY" "$PROG" 'argument with spaces'`,
+		}},
+		{name: "Upstart", source: defaultUpstartConfig, wants: []string{"chdir " + upstartQuote(workingDirectory)}},
+		{name: "System V", source: defaultSystemVConfig, wants: []string{
+			"working_directory=" + shellQuote(workingDirectory),
+			`cd "$working_directory" || exit 5`,
+		}},
+		{name: "Buildroot", source: defaultBuildrootConfig, wants: []string{
+			"WORKING_DIRECTORY=" + shellQuote(workingDirectory),
+			`if ! cd "$WORKING_DIRECTORY"; then`,
+		}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tpl, err := template.New(test.name).Funcs(funcs).Parse(test.source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var output bytes.Buffer
+			if err := tpl.Execute(&output, data); err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range test.wants {
+				if !strings.Contains(output.String(), want) {
+					t.Fatalf("rendered template does not contain %q", want)
+				}
+			}
+		})
+	}
+}
+
+func TestOpenWrtLauncherPreservesWorkingDirectoryAndArguments(t *testing.T) {
+	const launchScript = `cd "$1" && shift && exec "$@"`
+	if !strings.Contains(defaultOpenWrtConfig, shellQuote(launchScript)) {
+		t.Fatal("OpenWrt config does not contain the tested positional launcher")
+	}
+
+	workingDirectory := t.TempDir()
+	arguments := []string{"", "argument with spaces", "argument's quote", `literal;$(not-run)`, "%value", "-leading"}
+	inspectScript := `printf 'cwd=<%s>\ncount=<%s>\n' "$PWD" "$#"; for argument do printf 'arg=<%s>\n' "$argument"; done`
+	commandArguments := []string{"-c", launchScript, "sh", workingDirectory, "/bin/sh", "-c", inspectScript, "app"}
+	commandArguments = append(commandArguments, arguments...)
+	output, err := exec.Command("/bin/sh", commandArguments...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("run OpenWrt launcher: %v\n%s", err, output)
+	}
+
+	want := "cwd=<" + workingDirectory + ">\ncount=<6>\n"
+	for _, argument := range arguments {
+		want += "arg=<" + argument + ">\n"
+	}
+	if string(output) != want {
+		t.Fatalf("launcher output = %q, want %q", output, want)
 	}
 }
 
@@ -139,7 +219,7 @@ func TestOpenWrtStatusActive(t *testing.T) {
 	}{
 		{status: "running", want: true},
 		{status: "running (1/2)", want: true},
-		{status: "not running", exitCode: 5, want: true},
+		{status: "not running", exitCode: 5},
 		{status: "inactive", exitCode: 3},
 		{status: "not running", exitCode: 1},
 		{status: "unknown instance", exitCode: 4},

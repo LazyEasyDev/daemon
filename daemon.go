@@ -49,14 +49,15 @@ func executablePathFromTarget(target string) (string, error) {
 	if target == "" {
 		return "", errors.New("executable path error")
 	}
-	if filepath.IsAbs(target) {
-		return filepath.Clean(target), nil
+	path := target
+	if !filepath.IsAbs(path) {
+		executable, err := daemon_util.ExecPath()
+		if err != nil {
+			return "", err
+		}
+		path = filepath.Join(filepath.Dir(executable), path)
 	}
-	executable, err := daemon_util.ExecPath()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(filepath.Dir(executable), target), nil
+	return daemon_util.ResolveExecutablePath(path)
 }
 
 func install(_ context.Context, command *cli.Command) error {
@@ -109,7 +110,7 @@ func writeServiceList(output io.Writer, services []daemon_util.ServiceStatus) er
 }
 
 func remove(_ context.Context, command *cli.Command) error {
-	service, err := configuredService(command, command.Args().First(), "")
+	service, err := newService(command.Args().First(), "")
 	if err != nil {
 		return err
 	}
@@ -142,7 +143,7 @@ func start(_ context.Context, command *cli.Command) error {
 }
 
 func stop(_ context.Context, command *cli.Command) error {
-	service, err := configuredService(command, command.Args().First(), "")
+	service, err := newService(command.Args().First(), "")
 	if err != nil {
 		return err
 	}
@@ -156,7 +157,7 @@ func stop(_ context.Context, command *cli.Command) error {
 }
 
 func restart(_ context.Context, command *cli.Command) error {
-	service, err := configuredService(command, command.Args().First(), "")
+	service, err := newService(command.Args().First(), "")
 	if err != nil {
 		return err
 	}

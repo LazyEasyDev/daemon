@@ -19,13 +19,12 @@ func TestParseConfig(t *testing.T) {
 		"--port", "18081",
 		"--stop-after", "30s",
 		"--stop_delay", "45s",
-		"--windows-native-service",
 	}
 	cfg, err := parseConfig(args)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.Enabled || cfg.Message != "hello service" || cfg.Count != 7 || cfg.Port != 18081 || cfg.StopAfter != 30*time.Second || cfg.StopDelay != 45*time.Second || !cfg.WindowsNativeService {
+	if !cfg.Enabled || cfg.Message != "hello service" || cfg.Count != 7 || cfg.Port != 18081 || cfg.StopAfter != 30*time.Second || cfg.StopDelay != 45*time.Second {
 		t.Fatalf("parsed config = %+v", cfg)
 	}
 }

@@ -9,6 +9,7 @@ package daemon_util
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"text/template"
 )
@@ -76,9 +77,9 @@ func (linux *buildrootRecord) Install(args ...string) (string, error) {
 		linux.template,
 		funcs,
 		&struct {
-			Name, Description, Path, Args string
-			StopTimeoutSeconds            int64
-		}{linux.name, linux.description, execPatch, shellQuoteArgs(args), linux.stopTimeoutSeconds()},
+			Name, Description, Path, Args, WorkingDirectory string
+			StopTimeoutSeconds                              int64
+		}{linux.name, linux.description, execPatch, shellQuoteArgs(args), filepath.Dir(execPatch), linux.stopTimeoutSeconds()},
 		0755,
 	); err != nil {
 		return installAction + failed, err
@@ -193,6 +194,7 @@ const defaultBuildrootConfig = `#!/bin/sh
 
 NAME={{shellQuote .Name}}
 DAEMON={{shellQuote .Path}}
+WORKING_DIRECTORY={{shellQuote .WorkingDirectory}}
 PIDFILE=${PIDFILE:-/var/run/$NAME.pid}
 STOP_TIMEOUT={{.StopTimeoutSeconds}}
 
@@ -212,6 +214,10 @@ is_running() {
 
 do_start() {
 	echo -n "Starting $NAME: "
+	if ! cd "$WORKING_DIRECTORY"; then
+		echo "FAIL"
+		return 1
+	fi
 	if start-stop-daemon -S -q -b -m \
 		-p "$PIDFILE" -x "$DAEMON" -- {{.Args}}; then
 		sleep 1

@@ -5,14 +5,12 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"testing"
 	"time"
 
-	"github.com/urfave/cli/v3"
-
 	"github.com/LazyEasyDev/daemon/daemon_util"
+	"github.com/urfave/cli/v3"
 )
 
 type stopStub struct {
@@ -98,26 +96,16 @@ func TestInstallCommandParsesStopTimeoutBeforeApplication(t *testing.T) {
 	}
 }
 
-func TestStopTimeoutDefaultsToTenMinutes(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("the stop command timeout is specific to Windows")
-	}
+func TestStopTimeoutIsInstallOnly(t *testing.T) {
 	app := newCommand()
-	stopCommand := app.Command("stop")
-	if stopCommand == nil {
-		t.Fatal("stop command not found")
-	}
-
-	var got time.Duration
-	stopCommand.Action = func(_ context.Context, command *cli.Command) error {
-		got = command.Duration("stop-timeout")
-		return nil
-	}
-	if err := app.Run(context.Background(), []string{"daemon-util", "stop", "worker"}); err != nil {
-		t.Fatal(err)
-	}
-	if got != daemon_util.DefaultStopTimeout {
-		t.Fatalf("stop timeout = %v, want %v", got, daemon_util.DefaultStopTimeout)
+	for _, commandName := range []string{"stop", "restart", "remove"} {
+		command := app.Command(commandName)
+		if command == nil {
+			t.Fatalf("%s command not found", commandName)
+		}
+		if len(command.Flags) != 0 {
+			t.Errorf("%s flags = %v, want none", commandName, command.Flags)
+		}
 	}
 }
 

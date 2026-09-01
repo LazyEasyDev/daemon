@@ -10,6 +10,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"text/template"
 )
@@ -83,9 +84,9 @@ func (linux *systemVRecord) Install(args ...string) (string, error) {
 		linux.template,
 		funcs,
 		&struct {
-			Name, Description, Path, Args string
-			StopTimeoutSeconds            int64
-		}{linux.name, linux.description, execPatch, shellQuoteArgs(args), linux.stopTimeoutSeconds()},
+			Name, Description, Path, Args, WorkingDirectory string
+			StopTimeoutSeconds                              int64
+		}{linux.name, linux.description, execPatch, shellQuoteArgs(args), filepath.Dir(execPatch), linux.stopTimeoutSeconds()},
 		0755,
 	); err != nil {
 		return installAction + failed, err
@@ -236,6 +237,7 @@ const defaultSystemVConfig = `#! /bin/sh
 
 exec={{shellQuote .Path}}
 servname={{shellQuote .Description}}
+working_directory={{shellQuote .WorkingDirectory}}
 
 proc="{{.Name}}"
 pidfile="/var/run/$proc.pid"
@@ -268,6 +270,7 @@ is_process_group_running() {
 start() {
 	[ -x "$exec" ] || exit 5
 	command -v setsid >/dev/null 2>&1 || exit 5
+	cd "$working_directory" || exit 5
 
 	if [ -f "$pidfile" ]; then
 		if read_pid && ! is_expected_process && ! kill -0 "$pid" 2>/dev/null; then

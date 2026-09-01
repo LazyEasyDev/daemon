@@ -65,9 +65,9 @@ func (linux *openRCRecord) Install(args ...string) (string, error) {
 		linux.template,
 		template.FuncMap{"shellQuote": shellQuote},
 		&struct {
-			Name, Description, Path, Args string
-			StopTimeoutSeconds            int64
-		}{linux.name, linux.description, executablePath, shellQuoteArgs(args), linux.stopTimeoutSeconds()},
+			Name, Description, Path, Args, WorkingDirectory string
+			StopTimeoutSeconds                              int64
+		}{linux.name, linux.description, executablePath, shellQuoteArgs(args), filepath.Dir(executablePath), linux.stopTimeoutSeconds()},
 		0755,
 	); err != nil {
 		return installAction + failed, err
@@ -173,6 +173,7 @@ name={{shellQuote .Name}}
 description={{shellQuote .Description}}
 command={{shellQuote .Path}}
 command_args={{shellQuote .Args}}
+directory={{shellQuote .WorkingDirectory}}
 supervisor=supervise-daemon
 stopgroup=true
 respawn_delay=30

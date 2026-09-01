@@ -12,7 +12,6 @@ This configurable HTTP server verifies that `daemon` preserves application argum
 | `--port` | Integer | `18080` |
 | `--stop-after` | Duration | `0` (disabled) |
 | `--stop_delay` | Duration | `0` (disabled) |
-| `--windows-native-service` | Boolean | `false` |
 
 Use `--enabled=true` or `--enabled=false` for the Boolean option. Quote string values that contain spaces. Durations use Go syntax, such as `30s`, `2m`, or `1m30s`.
 
@@ -33,13 +32,13 @@ Query the endpoint once before the timeout and again after the service manager's
 
 The application also writes its start time to the service log in RFC3339 format whenever it launches.
 
-To test graceful-stop timeout handling, install the app with `--stop_delay`. When it receives SIGTERM or the equivalent Windows service stop request, it waits for that duration before shutting down:
+To test graceful-stop timeout handling, install the app with `--stop_delay`. It waits for that duration after receiving SIGTERM on Unix or `CTRL_BREAK_EVENT` on Windows:
 
 ```sh
 "$daemon_bin" install --stop-timeout 10s testapp "$app_bin" --port 18080 --stop_delay 30s
 ```
 
-With these values, Unix service managers that enforce `--stop-timeout` should force termination after 10 seconds. On Windows, the install value gives preshutdown cleanup 10 seconds during an operating-system shutdown or reboot; manual stop commands do not force termination. The `--stop-after` failure timer does not apply `--stop_delay`.
+With these values, the service manager or Windows wrapper should force termination after 10 seconds. Use a delay shorter than `--stop-timeout` to test successful graceful shutdown. The `--stop-after` failure timer does not apply `--stop_delay`.
 
 ## Run directly
 
@@ -118,7 +117,7 @@ Use the AMD64 binaries on Intel Macs.
 
 ## Test with daemon on Windows
 
-Run PowerShell as Administrator, then use the binaries matching the host architecture. The default command tests an ordinary application hosted by the daemon wrapper:
+Run PowerShell as Administrator, then use the binaries matching the host architecture. The application is hosted by the daemon wrapper:
 
 ```powershell
 $daemon = "$PWD\build\daemon-windows-amd64.exe"
@@ -130,15 +129,3 @@ Invoke-RestMethod http://127.0.0.1:18080/
 & $daemon stop testapp
 & $daemon remove testapp
 ```
-
-The test application is standalone and does not import the daemon package. It also has its own SCM implementation so the daemon's native-service mode can be tested separately:
-
-```powershell
-& $daemon install --windows-native-service testapp $app --windows-native-service --enabled=true --port 18080
-& $daemon start testapp
-Invoke-RestMethod http://127.0.0.1:18080/
-& $daemon stop testapp
-& $daemon remove testapp
-```
-
-The first `--windows-native-service` selects direct registration in the daemon CLI. The second appears after the application path, so it is passed to the test app and enables its independent SCM handler.

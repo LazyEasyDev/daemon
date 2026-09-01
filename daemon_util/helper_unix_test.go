@@ -14,6 +14,10 @@ func TestResolveExecutablePathAcceptsNativeExecutableAndSymlink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	executable, err = filepath.EvalSymlinks(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
 	resolved, err := resolveExecutablePath("unused", executable)
 	if err != nil {
 		t.Fatalf("resolveExecutablePath(native executable) error = %v", err)
@@ -30,8 +34,31 @@ func TestResolveExecutablePathAcceptsNativeExecutableAndSymlink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveExecutablePath(symlink) error = %v", err)
 	}
-	if resolved != link {
-		t.Fatalf("resolved symlink = %q, want original path %q", resolved, link)
+	if resolved != executable {
+		t.Fatalf("resolved symlink = %q, want destination %q", resolved, executable)
+	}
+}
+
+func TestResolveExecutablePathRejectsInvalidSymlink(t *testing.T) {
+	directory := t.TempDir()
+	dangling := filepath.Join(directory, "dangling")
+	if err := os.Symlink(filepath.Join(directory, "missing"), dangling); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ResolveExecutablePath(dangling); err == nil {
+		t.Fatal("ResolveExecutablePath accepted a dangling symlink")
+	}
+
+	first := filepath.Join(directory, "first")
+	second := filepath.Join(directory, "second")
+	if err := os.Symlink(second, first); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(first, second); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ResolveExecutablePath(first); err == nil {
+		t.Fatal("ResolveExecutablePath accepted a symlink loop")
 	}
 }
 

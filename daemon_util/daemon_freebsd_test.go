@@ -11,10 +11,11 @@ import (
 
 func renderFreeBSDConfig(t *testing.T, stopTimeoutSeconds int64) string {
 	t.Helper()
+	workingDirectory := "/opt/worker's files"
 	data := struct {
-		Name, RCName, RCVar, Description, Path, Args string
-		StopTimeoutSeconds                           int64
-	}{"worker", "worker", "worker_enable", "worker", "/opt/worker", "", stopTimeoutSeconds}
+		Name, RCName, RCVar, Description, Path, Args, WorkingDirectory string
+		StopTimeoutSeconds                                             int64
+	}{"worker", "worker", "worker_enable", "worker", workingDirectory + "/worker", "", workingDirectory, stopTimeoutSeconds}
 	tpl, err := template.New("bsdConfig").Funcs(template.FuncMap{"shellQuote": shellQuote}).Parse(defaultBSDConfig)
 	if err != nil {
 		t.Fatal(err)
@@ -60,6 +61,18 @@ func TestFreeBSDTemplateConfiguresStopTimeout(t *testing.T) {
 		`child_pid=$(check_pidfile "$child_pidfile" "$app_command")`,
 		`kill -TERM "$supervisor_pid"`,
 		`kill -KILL "$child_pid"`,
+	} {
+		if !strings.Contains(output, setting) {
+			t.Fatalf("rendered template does not contain %q", setting)
+		}
+	}
+}
+
+func TestFreeBSDTemplateConfiguresWorkingDirectory(t *testing.T) {
+	output := renderFreeBSDConfig(t, 45)
+	for _, setting := range []string{
+		"app_directory=" + shellQuote("/opt/worker's files"),
+		`cd "$app_directory" || return 1`,
 	} {
 		if !strings.Contains(output, setting) {
 			t.Fatalf("rendered template does not contain %q", setting)

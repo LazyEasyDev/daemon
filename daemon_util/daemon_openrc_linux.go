@@ -153,9 +153,7 @@ func (linux *openRCRecord) Status() (string, error) {
 }
 
 func (linux *openRCRecord) Run(executable Executable) (string, error) {
-	runAction := "Running " + linux.description + ":"
-	executable.Run()
-	return runAction + " completed.", nil
+	return runExecutable(linux.description, executable)
 }
 
 const defaultOpenRCConfig = `#!/sbin/openrc-run

@@ -29,7 +29,7 @@ func (sh *serviceHandler) updateInterval() time.Duration {
 	return windowsPendingUpdateInterval
 }
 
-func runWindowsPendingOperation(changes chan<- svc.Status, state svc.State, operation func(), updateInterval time.Duration) {
+func runWindowsPendingOperation(changes chan<- svc.Status, state svc.State, operation func() error, updateInterval time.Duration) error {
 	checkpoint := uint32(1)
 	pendingStatus := func() svc.Status {
 		return svc.Status{
@@ -40,18 +40,17 @@ func runWindowsPendingOperation(changes chan<- svc.Status, state svc.State, oper
 	}
 	changes <- pendingStatus()
 
-	done := make(chan struct{})
+	done := make(chan error, 1)
 	go func() {
-		operation()
-		close(done)
+		done <- operation()
 	}()
 
 	ticker := time.NewTicker(updateInterval)
 	defer ticker.Stop()
 	for {
 		select {
-		case <-done:
-			return
+		case err := <-done:
+			return err
 		case <-ticker.C:
 			checkpoint++
 			changes <- pendingStatus()
@@ -62,7 +61,9 @@ func runWindowsPendingOperation(changes chan<- svc.Status, state svc.State, oper
 func (sh *serviceHandler) Execute(_ []string, requests <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32) {
 	const commandsAccepted = svc.AcceptStop | svc.AcceptShutdown | svc.AcceptPreShutdown
 
-	runWindowsPendingOperation(changes, svc.StartPending, sh.executable.Start, sh.updateInterval())
+	if err := runWindowsPendingOperation(changes, svc.StartPending, sh.executable.Start, sh.updateInterval()); err != nil {
+		return true, 1
+	}
 	var done <-chan error
 	if executable, ok := sh.executable.(completionExecutable); ok {
 		done = executable.Done()
@@ -92,7 +93,9 @@ func (sh *serviceHandler) Execute(_ []string, requests <-chan svc.ChangeRequest,
 				time.Sleep(100 * time.Millisecond)
 				changes <- request.CurrentStatus
 			case svc.Stop, svc.Shutdown, svc.PreShutdown:
-				runWindowsPendingOperation(changes, svc.StopPending, sh.executable.Stop, sh.updateInterval())
+				if err := runWindowsPendingOperation(changes, svc.StopPending, sh.executable.Stop, sh.updateInterval()); err != nil {
+					return true, 1
+				}
 				return false, 0
 			}
 		}
@@ -111,7 +114,7 @@ func (windows *windowsRecord) Run(executable Executable) (string, error) {
 			return runAction + failed, getWindowsError(err)
 		}
 	} else {
-		executable.Run()
+		return runExecutable(windows.description, executable)
 	}
 
 	return runAction + " completed.", nil

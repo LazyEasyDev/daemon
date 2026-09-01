@@ -232,9 +232,7 @@ func (bsd *bsdRecord) Status() (string, error) {
 
 // Run - Run service
 func (bsd *bsdRecord) Run(e Executable) (string, error) {
-	runAction := "Running " + bsd.description + ":"
-	e.Run()
-	return runAction + " completed.", nil
+	return runExecutable(bsd.description, e)
 }
 
 const defaultBSDConfig = `#!/bin/sh

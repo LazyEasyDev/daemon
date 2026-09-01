@@ -184,9 +184,7 @@ func (linux *openWrtRecord) Status() (string, error) {
 
 // Run - Run service
 func (linux *openWrtRecord) Run(e Executable) (string, error) {
-	runAction := "Running " + linux.description + ":"
-	e.Run()
-	return runAction + " completed.", nil
+	return runExecutable(linux.description, e)
 }
 
 const defaultOpenWrtConfig = `#!/bin/sh /etc/rc.common

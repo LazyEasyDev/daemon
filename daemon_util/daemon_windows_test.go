@@ -23,26 +23,33 @@ type fakeWindowsService struct {
 }
 
 type fakeWindowsExecutable struct {
-	stop func()
+	stop     func()
+	startErr error
+	stopErr  error
 }
 
 type completingWindowsExecutable struct {
 	done chan error
 }
 
-func (*fakeWindowsExecutable) Start() {}
-
-func (executable *fakeWindowsExecutable) Stop() {
-	executable.stop()
+func (executable *fakeWindowsExecutable) Start() error {
+	return executable.startErr
 }
 
-func (*fakeWindowsExecutable) Run() {}
+func (executable *fakeWindowsExecutable) Stop() error {
+	if executable.stop != nil {
+		executable.stop()
+	}
+	return executable.stopErr
+}
 
-func (*completingWindowsExecutable) Start() {}
+func (*fakeWindowsExecutable) Run() error { return nil }
 
-func (*completingWindowsExecutable) Stop() {}
+func (*completingWindowsExecutable) Start() error { return nil }
 
-func (*completingWindowsExecutable) Run() {}
+func (*completingWindowsExecutable) Stop() error { return nil }
+
+func (*completingWindowsExecutable) Run() error { return nil }
 
 func (executable *completingWindowsExecutable) Done() <-chan error {
 	return executable.done
@@ -204,6 +211,33 @@ func TestServiceHandlerReportsChildFailure(t *testing.T) {
 	got := <-result
 	if !got.specific || got.code == 0 {
 		t.Fatalf("service result = (%t, %d), want a nonzero service-specific failure", got.specific, got.code)
+	}
+}
+
+func TestServiceHandlerReportsStartFailure(t *testing.T) {
+	handler := &serviceHandler{
+		executable: &fakeWindowsExecutable{startErr: errors.New("start failed")},
+	}
+	changes := make(chan svc.Status, 1)
+	specific, code := handler.Execute(nil, make(chan svc.ChangeRequest), changes)
+	if !specific || code == 0 {
+		t.Fatalf("service result = (%t, %d), want a nonzero service-specific failure", specific, code)
+	}
+	if status := <-changes; status.State != svc.StartPending {
+		t.Fatalf("service status = %v, want %v", status.State, svc.StartPending)
+	}
+}
+
+func TestServiceHandlerReportsStopFailure(t *testing.T) {
+	handler := &serviceHandler{
+		executable: &fakeWindowsExecutable{stopErr: errors.New("stop failed")},
+	}
+	requests := make(chan svc.ChangeRequest, 1)
+	requests <- svc.ChangeRequest{Cmd: svc.Stop}
+	changes := make(chan svc.Status, 3)
+	specific, code := handler.Execute(nil, requests, changes)
+	if !specific || code == 0 {
+		t.Fatalf("service result = (%t, %d), want a nonzero service-specific failure", specific, code)
 	}
 }
 

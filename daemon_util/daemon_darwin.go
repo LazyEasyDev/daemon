@@ -293,9 +293,7 @@ func (darwin *darwinRecord) Status() (string, error) {
 
 // Run - Run service
 func (darwin *darwinRecord) Run(e Executable) (string, error) {
-	runAction := "Running " + darwin.description + ":"
-	e.Run()
-	return runAction + " completed.", nil
+	return runExecutable(darwin.description, e)
 }
 
 const defaultPropertyList = `<?xml version="1.0" encoding="UTF-8"?>

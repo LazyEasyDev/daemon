@@ -174,9 +174,7 @@ func (linux *buildrootRecord) Status() (string, error) {
 
 // Run - Run service
 func (linux *buildrootRecord) Run(e Executable) (string, error) {
-	runAction := "Running " + linux.description + ":"
-	e.Run()
-	return runAction + " completed.", nil
+	return runExecutable(linux.description, e)
 }
 
 const defaultBuildrootConfig = `#!/bin/sh

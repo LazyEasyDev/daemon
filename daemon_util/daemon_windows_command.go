@@ -38,11 +38,10 @@ func newWindowsCommandExecutable(path string, stopTimeout time.Duration, args ..
 	}
 }
 
-func (executable *windowsCommandExecutable) Start() {
+func (executable *windowsCommandExecutable) Start() error {
 	job, err := createWindowsKillJob()
 	if err != nil {
-		executable.done <- err
-		return
+		return err
 	}
 	executable.jobMu.Lock()
 	executable.job = job
@@ -50,26 +49,24 @@ func (executable *windowsCommandExecutable) Start() {
 
 	if err := allocWindowsConsole(); err != nil && !errors.Is(err, winapi.ERROR_ACCESS_DENIED) {
 		executable.closeJob()
-		executable.done <- fmt.Errorf("allocate child process console: %w", err)
-		return
+		return fmt.Errorf("allocate child process console: %w", err)
 	}
 	if err := executable.command.Start(); err != nil {
 		executable.closeJob()
-		executable.done <- err
-		return
+		return err
 	}
 	if err := executable.assignAndResume(); err != nil {
 		_ = executable.command.Process.Kill()
 		_ = executable.command.Wait()
 		executable.closeJob()
-		executable.done <- err
-		return
+		return err
 	}
 	go func() {
 		err := executable.command.Wait()
 		executable.closeJob()
 		executable.done <- err
 	}()
+	return nil
 }
 
 func allocWindowsConsole() error {
@@ -80,14 +77,14 @@ func allocWindowsConsole() error {
 	return err
 }
 
-func (executable *windowsCommandExecutable) Stop() {
+func (executable *windowsCommandExecutable) Stop() error {
 	if executable.command.Process != nil {
 		processGroupID := uint32(executable.command.Process.Pid)
 		if waitForWindowsProcessGroupStop(processGroupID, executable.done, executable.stopTimeout, winapi.GenerateConsoleCtrlEvent) {
-			return
+			return nil
 		}
 	}
-	executable.terminateJob()
+	return executable.terminateJob()
 }
 
 func waitForWindowsProcessGroupStop(processGroupID uint32, done <-chan error, timeout time.Duration, generateConsoleCtrlEvent func(uint32, uint32) error) bool {
@@ -104,12 +101,13 @@ func waitForWindowsProcessGroupStop(processGroupID uint32, done <-chan error, ti
 	}
 }
 
-func (executable *windowsCommandExecutable) terminateJob() {
+func (executable *windowsCommandExecutable) terminateJob() error {
 	executable.jobMu.Lock()
 	defer executable.jobMu.Unlock()
 	if executable.job != 0 {
-		_ = winapi.TerminateJobObject(executable.job, 1)
+		return winapi.TerminateJobObject(executable.job, 1)
 	}
+	return nil
 }
 
 func createWindowsKillJob() (winapi.Handle, error) {
@@ -187,9 +185,11 @@ func (executable *windowsCommandExecutable) closeJob() {
 	}
 }
 
-func (executable *windowsCommandExecutable) Run() {
-	executable.Start()
-	<-executable.done
+func (executable *windowsCommandExecutable) Run() error {
+	if err := executable.Start(); err != nil {
+		return err
+	}
+	return <-executable.done
 }
 
 func (executable *windowsCommandExecutable) Done() <-chan error {

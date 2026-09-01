@@ -204,9 +204,7 @@ func (linux *systemDRecord) Status() (string, error) {
 
 // Run - Run service
 func (linux *systemDRecord) Run(e Executable) (string, error) {
-	runAction := "Running " + linux.description + ":"
-	e.Run()
-	return runAction + " completed.", nil
+	return runExecutable(linux.description, e)
 }
 
 const defaultSystemDConfig = `[Unit]

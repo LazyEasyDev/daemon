@@ -118,11 +118,19 @@ func ConfigureStopTimeout(daemon Daemon, timeout time.Duration) error {
 // Executable interface defines controlling methods of executable service
 type Executable interface {
 	// Start starts the service and returns after startup has completed.
-	Start()
+	Start() error
 	// Stop stops the service and returns after cleanup has completed.
-	Stop()
+	Stop() error
 	// Run runs the service until it is stopped.
-	Run()
+	Run() error
+}
+
+func runExecutable(description string, executable Executable) (string, error) {
+	runAction := "Running " + description + ":"
+	if err := executable.Run(); err != nil {
+		return runAction + failed, err
+	}
+	return runAction + " completed.", nil
 }
 
 // Kind is type of the daemon

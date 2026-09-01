@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -96,6 +97,23 @@ func TestInstallCommandParsesStopTimeoutBeforeApplication(t *testing.T) {
 	}
 }
 
+func TestInstallCommandRejectsZeroStopTimeout(t *testing.T) {
+	app := newCommand()
+	installCommand := app.Command("install")
+	if installCommand == nil {
+		t.Fatal("install command not found")
+	}
+	installCommand.Action = func(_ context.Context, command *cli.Command) error {
+		_, err := configuredService(command, "worker", "")
+		return err
+	}
+
+	err := app.Run(context.Background(), []string{"daemon-util", "install", "--stop-timeout", "0s", "worker", "myapp"})
+	if !errors.Is(err, daemon_util.ErrInvalidStopTimeout) {
+		t.Fatalf("zero stop timeout error = %v, want %v", err, daemon_util.ErrInvalidStopTimeout)
+	}
+}
+
 func TestStopTimeoutIsInstallOnly(t *testing.T) {
 	app := newCommand()
 	for _, commandName := range []string{"stop", "restart", "remove"} {
@@ -117,6 +135,21 @@ func TestInstallCommandRequiresServiceNameAndExecutable(t *testing.T) {
 	}
 }
 
+func TestLifecycleCommandsRequireExactlyOneServiceName(t *testing.T) {
+	for _, commandName := range []string{"remove", "start", "stop", "restart", "status"} {
+		for _, args := range [][]string{nil, {"worker", "extra"}} {
+			t.Run(fmt.Sprintf("%s/%d arguments", commandName, len(args)), func(t *testing.T) {
+				appArgs := append([]string{"daemon-util", commandName}, args...)
+				err := newCommand().Run(context.Background(), appArgs)
+				want := commandName + " requires exactly one service name"
+				if err == nil || err.Error() != want {
+					t.Fatalf("error = %v, want %q", err, want)
+				}
+			})
+		}
+	}
+}
+
 func TestListCommandHasLSAlias(t *testing.T) {
 	app := newCommand()
 	listCommand := app.Command("list")
@@ -134,6 +167,26 @@ func TestListCommandHasLSAlias(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("ls did not invoke the list command")
+	}
+}
+
+func TestRemoveCommandHasDeleteAlias(t *testing.T) {
+	app := newCommand()
+	removeCommand := app.Command("remove")
+	if removeCommand == nil {
+		t.Fatal("remove command not found")
+	}
+
+	called := false
+	removeCommand.Action = func(context.Context, *cli.Command) error {
+		called = true
+		return nil
+	}
+	if err := app.Run(context.Background(), []string{"daemon-util", "delete"}); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("delete did not invoke the remove command")
 	}
 }
 

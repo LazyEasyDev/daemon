@@ -36,9 +36,6 @@ func configuredService(command *cli.Command, serviceName, executablePath string)
 		return nil, err
 	}
 	timeout := command.Duration("stop-timeout")
-	if timeout == 0 {
-		timeout = daemon_util.DefaultStopTimeout
-	}
 	if err := daemon_util.ConfigureStopTimeout(service, timeout); err != nil {
 		return nil, err
 	}
@@ -109,8 +106,20 @@ func writeServiceList(output io.Writer, services []daemon_util.ServiceStatus) er
 	return writer.Flush()
 }
 
+func requiredServiceName(command *cli.Command) (string, error) {
+	args := command.Args().Slice()
+	if len(args) != 1 {
+		return "", fmt.Errorf("%s requires exactly one service name", command.Name)
+	}
+	return args[0], nil
+}
+
 func remove(_ context.Context, command *cli.Command) error {
-	service, err := newService(command.Args().First(), "")
+	serviceName, err := requiredServiceName(command)
+	if err != nil {
+		return err
+	}
+	service, err := newService(serviceName, "")
 	if err != nil {
 		return err
 	}
@@ -122,14 +131,18 @@ func remove(_ context.Context, command *cli.Command) error {
 	if err != nil {
 		return err
 	}
-	_ = removeServiceMetadata(command.Args().First())
+	_ = removeServiceMetadata(serviceName)
 	fmt.Println(result)
 
 	return nil
 }
 
 func start(_ context.Context, command *cli.Command) error {
-	service, err := newService(command.Args().First(), "")
+	serviceName, err := requiredServiceName(command)
+	if err != nil {
+		return err
+	}
+	service, err := newService(serviceName, "")
 	if err != nil {
 		return err
 	}
@@ -143,7 +156,11 @@ func start(_ context.Context, command *cli.Command) error {
 }
 
 func stop(_ context.Context, command *cli.Command) error {
-	service, err := newService(command.Args().First(), "")
+	serviceName, err := requiredServiceName(command)
+	if err != nil {
+		return err
+	}
+	service, err := newService(serviceName, "")
 	if err != nil {
 		return err
 	}
@@ -157,7 +174,11 @@ func stop(_ context.Context, command *cli.Command) error {
 }
 
 func restart(_ context.Context, command *cli.Command) error {
-	service, err := newService(command.Args().First(), "")
+	serviceName, err := requiredServiceName(command)
+	if err != nil {
+		return err
+	}
+	service, err := newService(serviceName, "")
 	if err != nil {
 		return err
 	}
@@ -186,7 +207,11 @@ func stopIfRunning(service stoppable) error {
 }
 
 func status(_ context.Context, command *cli.Command) error {
-	service, err := newService(command.Args().First(), "")
+	serviceName, err := requiredServiceName(command)
+	if err != nil {
+		return err
+	}
+	service, err := newService(serviceName, "")
 	if err != nil {
 		return err
 	}

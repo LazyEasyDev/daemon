@@ -36,9 +36,10 @@ func newCommand() *cli.Command {
 			Action:  list,
 		},
 		{
-			Name:   "remove",
-			Usage:  "remove app from system service",
-			Action: remove,
+			Name:    "remove",
+			Aliases: []string{"delete"},
+			Usage:   "remove app from system service",
+			Action:  remove,
 		},
 		{
 			Name:   "start",

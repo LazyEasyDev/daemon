@@ -13,6 +13,7 @@ import (
 	"unsafe"
 
 	winapi "golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/svc"
 )
 
 var allocConsoleProc = winapi.NewLazySystemDLL("kernel32.dll").NewProc("AllocConsole")
@@ -199,10 +200,22 @@ func (executable *windowsCommandExecutable) Done() <-chan error {
 // RunWindowsCommandService hosts an ordinary executable behind the Windows
 // Service Control Manager protocol.
 func RunWindowsCommandService(name, description, path string, args ...string) (string, error) {
-	service := &windowsRecord{name: name, description: description}
+	runAction := "Running " + description + ":"
 	stopTimeout, err := getWindowsServicePreshutdownTimeout(name)
 	if err != nil {
-		return "Running " + description + ":" + failed, getWindowsError(err)
+		return runAction + failed, getWindowsError(err)
 	}
-	return service.Run(newWindowsCommandExecutable(path, stopTimeout, args...))
+	executable := newWindowsCommandExecutable(path, stopTimeout, args...)
+	isService, err := svc.IsWindowsService()
+	if err != nil {
+		return runAction + failed, getWindowsError(err)
+	}
+	if isService {
+		if err := svc.Run(name, &serviceHandler{executable: executable}); err != nil {
+			return runAction + failed, getWindowsError(err)
+		}
+	} else if err := executable.Run(); err != nil {
+		return runAction + failed, err
+	}
+	return runAction + " completed.", nil
 }

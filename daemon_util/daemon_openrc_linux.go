@@ -15,7 +15,6 @@ type openRCRecord struct {
 	name           string
 	description    string
 	executablePath string
-	template       string
 }
 
 func openRCDetected(root string) bool {
@@ -62,7 +61,7 @@ func (linux *openRCRecord) Install(args ...string) (string, error) {
 	if err := writeTemplateFile(
 		servicePath,
 		"openRCConfig",
-		linux.template,
+		defaultOpenRCConfig,
 		template.FuncMap{"shellQuote": shellQuote},
 		&struct {
 			Name, Description, Path, Args, WorkingDirectory string
@@ -150,10 +149,6 @@ func (linux *openRCRecord) Status() (string, error) {
 
 	status, _ := linux.checkRunning()
 	return status, nil
-}
-
-func (linux *openRCRecord) Run(executable Executable) (string, error) {
-	return runExecutable(linux.description, executable)
 }
 
 const defaultOpenRCConfig = `#!/sbin/openrc-run

@@ -14,8 +14,13 @@ const (
 )
 
 type serviceHandler struct {
-	executable            Executable
+	executable            windowsServiceExecutable
 	pendingUpdateInterval time.Duration
+}
+
+type windowsServiceExecutable interface {
+	Start() error
+	Stop() error
 }
 
 type completionExecutable interface {
@@ -100,22 +105,4 @@ func (sh *serviceHandler) Execute(_ []string, requests <-chan svc.ChangeRequest,
 			}
 		}
 	}
-}
-
-func (windows *windowsRecord) Run(executable Executable) (string, error) {
-	runAction := "Running " + windows.description + ":"
-
-	isService, err := svc.IsWindowsService()
-	if err != nil {
-		return runAction + failed, getWindowsError(err)
-	}
-	if isService {
-		if err := svc.Run(windows.name, &serviceHandler{executable: executable}); err != nil {
-			return runAction + failed, getWindowsError(err)
-		}
-	} else {
-		return runExecutable(windows.description, executable)
-	}
-
-	return runAction + " completed.", nil
 }

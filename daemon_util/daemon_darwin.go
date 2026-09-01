@@ -27,10 +27,9 @@ type darwinRecord struct {
 	kind           Kind
 	executablePath string
 	path           string
-	template       string
 }
 
-func newDaemon(name, description string, kind Kind, _ []string, executablePath string) (Daemon, error) {
+func newDaemon(name, description string, kind Kind, executablePath string) (Daemon, error) {
 	var path string
 	switch kind {
 	case UserAgent:
@@ -51,21 +50,7 @@ func newDaemon(name, description string, kind Kind, _ []string, executablePath s
 		kind:           kind,
 		executablePath: executablePath,
 		path:           path,
-		template:       defaultPropertyList,
 	}, nil
-}
-
-// ListServices returns user-facing names of services registered by this tool.
-func ListServices() ([]string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
-	}
-	return listServiceFiles(
-		serviceDirectory{path: filepath.Join(home, "Library", "LaunchAgents"), suffix: ".plist"},
-		serviceDirectory{path: "/Library/LaunchAgents", suffix: ".plist"},
-		serviceDirectory{path: "/Library/LaunchDaemons", suffix: ".plist"},
-	)
 }
 
 // ListServiceStatuses returns the status of services registered by this tool.
@@ -183,7 +168,7 @@ func (darwin *darwinRecord) Install(args ...string) (string, error) {
 	if err := writeTemplateFile(
 		srvPath,
 		"propertyList",
-		darwin.template,
+		defaultPropertyList,
 		funcs,
 		&struct {
 			Name, Path, WorkingDirectory string
@@ -289,11 +274,6 @@ func (darwin *darwinRecord) Status() (string, error) {
 	statusAction, _ := darwin.checkRunning()
 
 	return statusAction, nil
-}
-
-// Run - Run service
-func (darwin *darwinRecord) Run(e Executable) (string, error) {
-	return runExecutable(darwin.description, e)
 }
 
 const defaultPropertyList = `<?xml version="1.0" encoding="UTF-8"?>

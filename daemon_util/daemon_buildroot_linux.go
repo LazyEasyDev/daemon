@@ -20,7 +20,6 @@ type buildrootRecord struct {
 	name           string
 	description    string
 	executablePath string
-	template       string
 }
 
 // Standard service path for Buildroot-style daemons
@@ -74,7 +73,7 @@ func (linux *buildrootRecord) Install(args ...string) (string, error) {
 	if err := writeTemplateFile(
 		srvPath,
 		"buildrootConfig",
-		linux.template,
+		defaultBuildrootConfig,
 		funcs,
 		&struct {
 			Name, Description, Path, Args, WorkingDirectory string
@@ -84,8 +83,6 @@ func (linux *buildrootRecord) Install(args ...string) (string, error) {
 	); err != nil {
 		return installAction + failed, err
 	}
-
-	//check restart file
 
 	return installAction + success, nil
 }
@@ -170,11 +167,6 @@ func (linux *buildrootRecord) Status() (string, error) {
 
 	statusAction, _ := linux.checkRunning()
 	return statusAction, nil
-}
-
-// Run - Run service
-func (linux *buildrootRecord) Run(e Executable) (string, error) {
-	return runExecutable(linux.description, e)
 }
 
 const defaultBuildrootConfig = `#!/bin/sh

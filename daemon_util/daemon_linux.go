@@ -25,7 +25,7 @@ type linuxBackend struct {
 	warning          bool
 	detected         func(string) bool
 	serviceDirectory func(string) serviceDirectory
-	newRecord        func(string, string, []string, string) (Daemon, error)
+	newRecord        func(string, string, string) (Daemon, error)
 }
 
 var linuxBackends = []linuxBackend{
@@ -45,11 +45,8 @@ var linuxBackends = []linuxBackend{
 				},
 			}
 		},
-		newRecord: func(name, description string, dependencies []string, executablePath string) (Daemon, error) {
-			if err := validateSystemdDependencies(dependencies); err != nil {
-				return nil, err
-			}
-			return &systemDRecord{name: name, description: description, dependencies: dependencies, executablePath: executablePath, template: defaultSystemDConfig}, nil
+		newRecord: func(name, description, executablePath string) (Daemon, error) {
+			return &systemDRecord{name: name, description: description, executablePath: executablePath}, nil
 		},
 	},
 	{
@@ -64,8 +61,8 @@ var linuxBackends = []linuxBackend{
 				},
 			}
 		},
-		newRecord: func(name, description string, _ []string, executablePath string) (Daemon, error) {
-			return &openRCRecord{name: name, description: description, executablePath: executablePath, template: defaultOpenRCConfig}, nil
+		newRecord: func(name, description, executablePath string) (Daemon, error) {
+			return &openRCRecord{name: name, description: description, executablePath: executablePath}, nil
 		},
 	},
 	{
@@ -84,8 +81,8 @@ var linuxBackends = []linuxBackend{
 				},
 			}
 		},
-		newRecord: func(name, description string, _ []string, executablePath string) (Daemon, error) {
-			return &upstartRecord{name: name, description: description, executablePath: executablePath, template: defaultUpstartConfig}, nil
+		newRecord: func(name, description, executablePath string) (Daemon, error) {
+			return &upstartRecord{name: name, description: description, executablePath: executablePath}, nil
 		},
 	},
 	{
@@ -102,8 +99,8 @@ var linuxBackends = []linuxBackend{
 				},
 			}
 		},
-		newRecord: func(name, description string, _ []string, executablePath string) (Daemon, error) {
-			return &openWrtRecord{name: name, description: description, executablePath: executablePath, template: defaultOpenWrtConfig}, nil
+		newRecord: func(name, description, executablePath string) (Daemon, error) {
+			return &openWrtRecord{name: name, description: description, executablePath: executablePath}, nil
 		},
 	},
 	{
@@ -119,8 +116,8 @@ var linuxBackends = []linuxBackend{
 				},
 			}
 		},
-		newRecord: func(name, description string, _ []string, executablePath string) (Daemon, error) {
-			return &buildrootRecord{name: name, description: description, executablePath: executablePath, template: defaultBuildrootConfig}, nil
+		newRecord: func(name, description, executablePath string) (Daemon, error) {
+			return &buildrootRecord{name: name, description: description, executablePath: executablePath}, nil
 		},
 	},
 	{
@@ -136,23 +133,10 @@ var linuxBackends = []linuxBackend{
 				},
 			}
 		},
-		newRecord: func(name, description string, _ []string, executablePath string) (Daemon, error) {
-			return &systemVRecord{name: name, description: description, executablePath: executablePath, template: defaultSystemVConfig}, nil
+		newRecord: func(name, description, executablePath string) (Daemon, error) {
+			return &systemVRecord{name: name, description: description, executablePath: executablePath}, nil
 		},
 	},
-}
-
-// ListServices returns user-facing names of services registered by this tool.
-func ListServices() ([]string, error) {
-	return listLinuxServices("/")
-}
-
-func listLinuxServices(root string) ([]string, error) {
-	backend, err := detectLinuxBackend(root)
-	if err != nil {
-		return nil, err
-	}
-	return listServiceFiles(backend.serviceDirectory(root))
 }
 
 // ListServiceStatuses returns the status of services registered by this tool.
@@ -176,12 +160,12 @@ func commandExitCode(err error) int {
 }
 
 // Get the daemon properly
-func newDaemon(name, description string, _ Kind, dependencies []string, executablePath string) (Daemon, error) {
+func newDaemon(name, description string, _ Kind, executablePath string) (Daemon, error) {
 	backend, err := detectLinuxBackend("/")
 	if err != nil {
 		return nil, err
 	}
-	record, err := backend.newRecord(name, description, dependencies, executablePath)
+	record, err := backend.newRecord(name, description, executablePath)
 	if err != nil {
 		return nil, err
 	}

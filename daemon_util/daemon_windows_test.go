@@ -43,13 +43,9 @@ func (executable *fakeWindowsExecutable) Stop() error {
 	return executable.stopErr
 }
 
-func (*fakeWindowsExecutable) Run() error { return nil }
-
 func (*completingWindowsExecutable) Start() error { return nil }
 
 func (*completingWindowsExecutable) Stop() error { return nil }
-
-func (*completingWindowsExecutable) Run() error { return nil }
 
 func (executable *completingWindowsExecutable) Done() <-chan error {
 	return executable.done

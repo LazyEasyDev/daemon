@@ -14,9 +14,9 @@ import (
 
 func TestLinuxTemplatesConfigureStopTimeout(t *testing.T) {
 	data := struct {
-		Name, Description, Dependencies, Path, Args, WorkingDirectory string
-		StopTimeoutSeconds                                            int64
-	}{"worker", "worker", "", "/opt/worker", "", "/opt", 45}
+		Name, Description, Path, Args, WorkingDirectory string
+		StopTimeoutSeconds                              int64
+	}{"worker", "worker", "/opt/worker", "", "/opt", 45}
 	funcs := template.FuncMap{
 		"shellQuote":         shellQuote,
 		"systemdQuote":       systemdQuote,
@@ -56,9 +56,9 @@ func TestLinuxTemplatesConfigureStopTimeout(t *testing.T) {
 func TestLinuxTemplatesConfigureWorkingDirectory(t *testing.T) {
 	workingDirectory := "/opt/worker's files"
 	data := struct {
-		Name, Description, Dependencies, Path, Args, WorkingDirectory string
-		StopTimeoutSeconds                                            int64
-	}{"worker", "worker", "", workingDirectory + "/worker", shellQuoteArgs([]string{"argument with spaces"}), workingDirectory, 45}
+		Name, Description, Path, Args, WorkingDirectory string
+		StopTimeoutSeconds                              int64
+	}{"worker", "worker", workingDirectory + "/worker", shellQuoteArgs([]string{"argument with spaces"}), workingDirectory, 45}
 	funcs := template.FuncMap{
 		"shellQuote":         shellQuote,
 		"systemdQuote":       systemdQuote,
@@ -338,32 +338,6 @@ func TestSystemVDetected(t *testing.T) {
 				t.Fatalf("systemVDetected() = %v, want %v", got, test.want)
 			}
 		})
-	}
-}
-
-func TestLinuxListingUsesDetectedBackend(t *testing.T) {
-	root := t.TempDir()
-	systemdDirectory := filepath.Join(root, "run/systemd/system")
-	serviceDirectory := filepath.Join(root, "etc/systemd/system")
-	legacyDirectory := filepath.Join(root, "etc/init.d")
-	for _, directory := range []string{systemdDirectory, serviceDirectory, legacyDirectory} {
-		if err := os.MkdirAll(directory, 0755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := os.WriteFile(filepath.Join(serviceDirectory, managedServicePrefix+"current.service"), nil, 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(legacyDirectory, managedServicePrefix+"legacy"), nil, 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	names, err := listLinuxServices(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(names) != 1 || names[0] != "current" {
-		t.Fatalf("listed services = %q, want only the detected systemd service", names)
 	}
 }
 

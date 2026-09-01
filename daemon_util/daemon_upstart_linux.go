@@ -20,7 +20,6 @@ type upstartRecord struct {
 	name           string
 	description    string
 	executablePath string
-	template       string
 }
 
 // Standard service path for systemV daemons
@@ -84,7 +83,7 @@ func (linux *upstartRecord) Install(args ...string) (string, error) {
 	if err := writeTemplateFile(
 		srvPath,
 		"upstartConfig",
-		linux.template,
+		defaultUpstartConfig,
 		funcs,
 		&struct {
 			Name, Description, Path, Args, WorkingDirectory string
@@ -177,11 +176,6 @@ func (linux *upstartRecord) Status() (string, error) {
 	statusAction, _ := linux.checkRunning()
 
 	return statusAction, nil
-}
-
-// Run - Run service
-func (linux *upstartRecord) Run(e Executable) (string, error) {
-	return runExecutable(linux.description, e)
 }
 
 const defaultUpstartConfig = `# {{.Name}} {{.Description}}

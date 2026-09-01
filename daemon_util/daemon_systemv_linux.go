@@ -21,7 +21,6 @@ type systemVRecord struct {
 	name           string
 	description    string
 	executablePath string
-	template       string
 }
 
 // Standard service path for systemV daemons
@@ -81,7 +80,7 @@ func (linux *systemVRecord) Install(args ...string) (string, error) {
 	if err := writeTemplateFile(
 		srvPath,
 		"systemVConfig",
-		linux.template,
+		defaultSystemVConfig,
 		funcs,
 		&struct {
 			Name, Description, Path, Args, WorkingDirectory string
@@ -185,11 +184,6 @@ func (linux *systemVRecord) Status() (string, error) {
 	statusAction, _ := linux.checkRunning()
 
 	return statusAction, nil
-}
-
-// Run - Run service
-func (linux *systemVRecord) Run(e Executable) (string, error) {
-	return runExecutable(linux.description, e)
 }
 
 func (linux *systemVRecord) serviceLinks() []string {

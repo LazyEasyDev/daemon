@@ -22,7 +22,6 @@ type bsdRecord struct {
 	name           string
 	description    string
 	executablePath string
-	template       string
 }
 
 // Standard service path for systemV daemons
@@ -62,18 +61,12 @@ func (bsd *bsdRecord) getCmd(cmd string) string {
 }
 
 // Get the daemon properly
-func newDaemon(name, description string, _ Kind, _ []string, executablePath string) (Daemon, error) {
+func newDaemon(name, description string, _ Kind, executablePath string) (Daemon, error) {
 	return &bsdRecord{
 		name:           name,
 		description:    description,
 		executablePath: executablePath,
-		template:       defaultBSDConfig,
 	}, nil
-}
-
-// ListServices returns user-facing names of services registered by this tool.
-func ListServices() ([]string, error) {
-	return listServiceFiles(serviceDirectory{path: "/usr/local/etc/rc.d"})
 }
 
 // ListServiceStatuses returns the status of services registered by this tool.
@@ -126,7 +119,7 @@ func (bsd *bsdRecord) Install(args ...string) (string, error) {
 	if err := writeTemplateFile(
 		srvPath,
 		"bsdConfig",
-		bsd.template,
+		defaultBSDConfig,
 		funcs,
 		&struct {
 			Name, RCName, RCVar, Description, Path, Args, WorkingDirectory string
@@ -228,11 +221,6 @@ func (bsd *bsdRecord) Status() (string, error) {
 	statusAction, _ := bsd.checkRunning()
 
 	return statusAction, nil
-}
-
-// Run - Run service
-func (bsd *bsdRecord) Run(e Executable) (string, error) {
-	return runExecutable(bsd.description, e)
 }
 
 const defaultBSDConfig = `#!/bin/sh

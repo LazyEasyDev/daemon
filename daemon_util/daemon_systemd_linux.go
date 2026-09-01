@@ -19,9 +19,7 @@ type systemDRecord struct {
 	serviceConfig
 	name           string
 	description    string
-	dependencies   []string
 	executablePath string
-	template       string
 }
 
 // Standard service path for systemD daemons
@@ -84,15 +82,14 @@ func (linux *systemDRecord) Install(args ...string) (string, error) {
 	if err := writeTemplateFile(
 		srvPath,
 		"systemDConfig",
-		linux.template,
+		defaultSystemDConfig,
 		funcs,
 		&struct {
-			Name, Description, Dependencies, Path, Args, WorkingDirectory string
-			StopTimeoutSeconds                                            int64
+			Name, Description, Path, Args, WorkingDirectory string
+			StopTimeoutSeconds                              int64
 		}{
 			linux.name,
 			linux.description,
-			systemdConfigQuoteArgs(linux.dependencies),
 			execPatch,
 			systemdQuoteArgs(args),
 			filepath.Dir(execPatch),
@@ -202,15 +199,8 @@ func (linux *systemDRecord) Status() (string, error) {
 	return statusAction, nil
 }
 
-// Run - Run service
-func (linux *systemDRecord) Run(e Executable) (string, error) {
-	return runExecutable(linux.description, e)
-}
-
 const defaultSystemDConfig = `[Unit]
 Description={{systemdConfigQuote .Description}}
-Requires={{.Dependencies}}
-After={{.Dependencies}}
 
 [Service]
 Type=exec

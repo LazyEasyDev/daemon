@@ -39,19 +39,15 @@ type status struct {
 }
 
 type application struct {
-	config          config
-	args            []string
-	executable      string
-	startedAt       time.Time
-	server          *http.Server
-	serveErr        chan error
-	stopAfterCancel chan struct{}
-	fatal           func(error)
-	startMu         sync.Mutex
-	started         bool
-	stopAfterOnce   sync.Once
-	stopAfterResult sync.Once
-	stopOnce        sync.Once
+	config     config
+	args       []string
+	executable string
+	startedAt  time.Time
+	server     *http.Server
+	serveErr   chan error
+	startMu    sync.Mutex
+	started    bool
+	stopOnce   sync.Once
 }
 
 func parseConfig(args []string) (config, error) {
@@ -84,15 +80,11 @@ func parseConfig(args []string) (config, error) {
 
 func newApplication(cfg config, args []string, executable string) *application {
 	app := &application{
-		config:          cfg,
-		args:            append([]string(nil), args...),
-		executable:      executable,
-		startedAt:       time.Now(),
-		serveErr:        make(chan error, 1),
-		stopAfterCancel: make(chan struct{}),
-		fatal: func(err error) {
-			log.Fatal(err)
-		},
+		config:     cfg,
+		args:       append([]string(nil), args...),
+		executable: executable,
+		startedAt:  time.Now(),
+		serveErr:   make(chan error, 1),
 	}
 
 	mux := http.NewServeMux()
@@ -127,42 +119,6 @@ func (app *application) handleHealth(writer http.ResponseWriter, _ *http.Request
 	_, _ = io.WriteString(writer, "ok\n")
 }
 
-func (app *application) Start() {
-	if err := app.start(); err != nil {
-		log.Fatalf("start HTTP server: %v", err)
-	}
-	app.startStopAfterTimer()
-}
-
-func (app *application) startStopAfterTimer() {
-	if app.config.StopAfter <= 0 {
-		return
-	}
-	app.stopAfterOnce.Do(func() {
-		go func() {
-			timer := time.NewTimer(app.config.StopAfter)
-			defer timer.Stop()
-			select {
-			case <-timer.C:
-				app.handleStopAfterElapsed()
-			case <-app.stopAfterCancel:
-			}
-		}()
-	})
-}
-
-func (app *application) handleStopAfterElapsed() {
-	elapsed := false
-	app.stopAfterResult.Do(func() {
-		elapsed = true
-	})
-	if !elapsed {
-		return
-	}
-	app.shutdown()
-	app.fatal(fmt.Errorf("%w: %s", errStopAfter, app.config.StopAfter))
-}
-
 func (app *application) start() error {
 	app.startMu.Lock()
 	defer app.startMu.Unlock()
@@ -186,9 +142,6 @@ func (app *application) start() error {
 
 func (app *application) Stop() {
 	app.stopOnce.Do(func() {
-		app.stopAfterResult.Do(func() {
-			close(app.stopAfterCancel)
-		})
 		if app.config.StopDelay > 0 {
 			log.Printf("delaying graceful stop for %s", app.config.StopDelay)
 			time.Sleep(app.config.StopDelay)
@@ -202,12 +155,6 @@ func (app *application) shutdown() {
 	defer cancel()
 	if err := app.server.Shutdown(ctx); err != nil {
 		log.Printf("stop HTTP server: %v", err)
-	}
-}
-
-func (app *application) Run() {
-	if err := app.run(); err != nil {
-		log.Fatal(err)
 	}
 }
 

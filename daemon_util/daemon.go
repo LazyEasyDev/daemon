@@ -13,7 +13,6 @@ var (
 	ErrInvalidName           = errors.New("invalid service name")
 	ErrInvalidKind           = errors.New("invalid daemon kind")
 	ErrInvalidExecutablePath = errors.New("invalid executable path")
-	ErrInvalidDependency     = errors.New("invalid dependency")
 	ErrInvalidStopTimeout    = errors.New("invalid stop timeout")
 )
 
@@ -96,9 +95,6 @@ type Daemon interface {
 
 	// Status - check the service status
 	Status() (string, error)
-
-	// Run - run executable service
-	Run(e Executable) (string, error)
 }
 
 type stopTimeoutConfigurer interface {
@@ -113,24 +109,6 @@ func ConfigureStopTimeout(daemon Daemon, timeout time.Duration) error {
 		return ErrInvalidStopTimeout
 	}
 	return configurer.SetStopTimeout(timeout)
-}
-
-// Executable interface defines controlling methods of executable service
-type Executable interface {
-	// Start starts the service and returns after startup has completed.
-	Start() error
-	// Stop stops the service and returns after cleanup has completed.
-	Stop() error
-	// Run runs the service until it is stopped.
-	Run() error
-}
-
-func runExecutable(description string, executable Executable) (string, error) {
-	runAction := "Running " + description + ":"
-	if err := executable.Run(); err != nil {
-		return runAction + failed, err
-	}
-	return runAction + " completed.", nil
 }
 
 // Kind is type of the daemon
@@ -166,29 +144,24 @@ const (
 // description: any explanation, what is the service, its purpose
 //
 // kind: what kind of daemon to create
-func New(name, description string, kind Kind, dependencies ...string) (Daemon, error) {
-	return newDaemonWithExecutable(name, description, kind, "", dependencies)
+func New(name, description string, kind Kind) (Daemon, error) {
+	return newDaemonWithExecutable(name, description, kind, "")
 }
 
 // NewWithExecutable creates a daemon for an executable at an absolute path.
-func NewWithExecutable(name, description, executablePath string, kind Kind, dependencies ...string) (Daemon, error) {
+func NewWithExecutable(name, description, executablePath string, kind Kind) (Daemon, error) {
 	if !filepath.IsAbs(executablePath) {
 		return nil, fmt.Errorf("%w: path must be absolute", ErrInvalidExecutablePath)
 	}
-	return newDaemonWithExecutable(name, description, kind, filepath.Clean(executablePath), dependencies)
+	return newDaemonWithExecutable(name, description, kind, filepath.Clean(executablePath))
 }
 
-func newDaemonWithExecutable(name, description string, kind Kind, executablePath string, dependencies []string) (Daemon, error) {
+func newDaemonWithExecutable(name, description string, kind Kind, executablePath string) (Daemon, error) {
 	if err := validateServiceName(name); err != nil {
 		return nil, err
 	}
 	if strings.ContainsAny(description, "\x00\r\n") {
 		return nil, errors.New("description must be a single line")
-	}
-	for _, dependency := range dependencies {
-		if strings.ContainsAny(dependency, "\x00\r\n") {
-			return nil, fmt.Errorf("dependency %q must be a single line", dependency)
-		}
 	}
 
 	switch runtime.GOOS {
@@ -210,7 +183,7 @@ func newDaemonWithExecutable(name, description string, kind Kind, executablePath
 		}
 	}
 
-	return newDaemon(name, description, kind, dependencies, executablePath)
+	return newDaemon(name, description, kind, executablePath)
 }
 
 func validateServiceName(name string) error {

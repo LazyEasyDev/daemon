@@ -7,7 +7,6 @@ package daemon_util
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -102,34 +101,6 @@ type serviceDirectory struct {
 	isRunning  func(string) bool
 }
 
-func listServiceFiles(directories ...serviceDirectory) ([]string, error) {
-	names := make(map[string]struct{})
-	for _, directory := range directories {
-		entries, err := os.ReadDir(directory.path)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		for _, entry := range entries {
-			if entry.IsDir() {
-				continue
-			}
-			filename := entry.Name()
-			if !strings.HasPrefix(filename, directory.filePrefix) || !strings.HasSuffix(filename, directory.suffix) {
-				continue
-			}
-			registrationName := strings.TrimPrefix(filename, directory.filePrefix)
-			registrationName = strings.TrimSuffix(registrationName, directory.suffix)
-			if logicalName, ok := logicalServiceName(registrationName); ok {
-				names[logicalName] = struct{}{}
-			}
-		}
-	}
-	return sortedServiceNames(names), nil
-}
-
 func listServiceStatuses(directories ...serviceDirectory) ([]ServiceStatus, error) {
 	statuses := make(map[string]string)
 	for _, directory := range directories {
@@ -165,25 +136,6 @@ func listServiceStatuses(directories ...serviceDirectory) ([]ServiceStatus, erro
 		}
 	}
 	return sortedServiceStatuses(statuses), nil
-}
-
-func filterManagedServiceNames(registrationNames []string) []string {
-	names := make(map[string]struct{})
-	for _, registrationName := range registrationNames {
-		if logicalName, ok := logicalServiceName(registrationName); ok {
-			names[logicalName] = struct{}{}
-		}
-	}
-	return sortedServiceNames(names)
-}
-
-func sortedServiceNames(names map[string]struct{}) []string {
-	result := make([]string, 0, len(names))
-	for name := range names {
-		result = append(result, name)
-	}
-	sort.Strings(result)
-	return result
 }
 
 func sortedServiceStatuses(statuses map[string]string) []ServiceStatus {
@@ -232,32 +184,6 @@ func systemdQuoteArgs(args []string) string {
 
 func systemdConfigQuote(value string) string {
 	return strings.ReplaceAll(strconv.Quote(value), "%", "%%")
-}
-
-func systemdConfigQuoteArgs(args []string) string {
-	return quoteArgs(args, systemdConfigQuote)
-}
-
-func validateSystemdDependencies(dependencies []string) error {
-	for _, dependency := range dependencies {
-		if dependency == "" {
-			return fmt.Errorf("%w: name must not be empty", ErrInvalidDependency)
-		}
-		for _, character := range dependency {
-			if character >= 'a' && character <= 'z' ||
-				character >= 'A' && character <= 'Z' ||
-				character >= '0' && character <= '9' ||
-				strings.ContainsRune(":_.@-", character) {
-				continue
-			}
-			return fmt.Errorf("%w %q: unsupported character %q", ErrInvalidDependency, dependency, character)
-		}
-		separator := strings.LastIndexByte(dependency, '.')
-		if separator <= 0 || separator == len(dependency)-1 {
-			return fmt.Errorf("%w %q: unit type suffix is required", ErrInvalidDependency, dependency)
-		}
-	}
-	return nil
 }
 
 func writeTemplateFile(path, name, source string, funcs template.FuncMap, data any, mode fs.FileMode) error {

@@ -20,7 +20,6 @@ type openWrtRecord struct {
 	name           string
 	description    string
 	executablePath string
-	template       string
 }
 
 // Standard service path for systemV daemons
@@ -79,7 +78,7 @@ func (linux *openWrtRecord) Install(args ...string) (string, error) {
 	if err := writeTemplateFile(
 		srvPath,
 		"openWrtConfig",
-		linux.template,
+		defaultOpenWrtConfig,
 		funcs,
 		&struct {
 			Name, Description, Path, Args, WorkingDirectory string
@@ -180,11 +179,6 @@ func (linux *openWrtRecord) Status() (string, error) {
 	statusAction, _ := linux.checkRunning()
 
 	return statusAction, nil
-}
-
-// Run - Run service
-func (linux *openWrtRecord) Run(e Executable) (string, error) {
-	return runExecutable(linux.description, e)
 }
 
 const defaultOpenWrtConfig = `#!/bin/sh /etc/rc.common

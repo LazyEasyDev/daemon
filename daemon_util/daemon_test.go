@@ -7,16 +7,6 @@ import (
 	"time"
 )
 
-type failingExecutable struct {
-	err error
-}
-
-func (*failingExecutable) Start() error { return nil }
-
-func (*failingExecutable) Stop() error { return nil }
-
-func (executable *failingExecutable) Run() error { return executable.err }
-
 func TestManagedServiceName(t *testing.T) {
 	name, err := ManagedServiceName("Worker1")
 	if err != nil {
@@ -82,16 +72,5 @@ func TestServiceConfigRejectsInvalidStopTimeout(t *testing.T) {
 		if err := new(serviceConfig).SetStopTimeout(timeout); !errors.Is(err, ErrInvalidStopTimeout) {
 			t.Errorf("SetStopTimeout(%v) error = %v, want %v", timeout, err, ErrInvalidStopTimeout)
 		}
-	}
-}
-
-func TestRunExecutablePropagatesError(t *testing.T) {
-	runErr := errors.New("run failed")
-	result, err := runExecutable("worker", &failingExecutable{err: runErr})
-	if !errors.Is(err, runErr) {
-		t.Fatalf("runExecutable() error = %v, want %v", err, runErr)
-	}
-	if result != "Running worker: [FAILED]" {
-		t.Fatalf("runExecutable() result = %q, want %q", result, "Running worker: [FAILED]")
 	}
 }

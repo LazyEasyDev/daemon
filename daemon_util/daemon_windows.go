@@ -25,7 +25,6 @@ type windowsRecord struct {
 	serviceConfig
 	name           string
 	description    string
-	dependencies   []string
 	executablePath string
 }
 
@@ -42,12 +41,11 @@ const (
 	maxWindowsPreshutdownTimeout = time.Duration(1<<32-1) * time.Millisecond
 )
 
-func newDaemon(name, description string, _ Kind, dependencies []string, executablePath string) (Daemon, error) {
+func newDaemon(name, description string, _ Kind, executablePath string) (Daemon, error) {
 
 	return &windowsRecord{
 		name:           name,
 		description:    description,
-		dependencies:   dependencies,
 		executablePath: executablePath,
 	}, nil
 }
@@ -120,19 +118,6 @@ func getWindowsServicePreshutdownTimeout(name string) (time.Duration, error) {
 	}
 	defer service.Close()
 	return getWindowsPreshutdownTimeout(service)
-}
-
-// ListServices returns user-facing names of services registered by this tool.
-func ListServices() ([]string, error) {
-	services, err := enumerateWindowsServices(winapi.SERVICE_STATE_ALL)
-	if err != nil {
-		return nil, err
-	}
-	names := make([]string, 0, len(services))
-	for _, service := range services {
-		names = append(names, service.name)
-	}
-	return filterManagedServiceNames(names), nil
 }
 
 // ListServiceStatuses returns the status of services registered by this tool.
@@ -226,10 +211,9 @@ func (windows *windowsRecord) Install(args ...string) (string, error) {
 	}
 
 	s, err = m.CreateService(windows.name, execp, mgr.Config{
-		DisplayName:  windows.description,
-		Description:  windows.description,
-		StartType:    mgr.StartAutomatic,
-		Dependencies: windows.dependencies,
+		DisplayName: windows.description,
+		Description: windows.description,
+		StartType:   mgr.StartAutomatic,
 	}, args...)
 	if err != nil {
 		return installAction + failed, getWindowsError(err)

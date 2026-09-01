@@ -110,3 +110,26 @@ func TestFreeBSDStopOrdersEscalationAndCleanup(t *testing.T) {
 		`rm -f "$pidfile" "$child_pidfile"`,
 	)
 }
+
+func TestFreeBSDStatus(t *testing.T) {
+	tests := []struct {
+		name           string
+		status         string
+		exitCode       int
+		wantRunning    bool
+		wantRecognized bool
+	}{
+		{name: "running", status: "worker is running as pid 42.", wantRunning: true, wantRecognized: true},
+		{name: "stopped", status: "worker is not running.", exitCode: 1, wantRecognized: true},
+		{name: "command failure", status: "service: not found", exitCode: 1},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			running, recognized := freeBSDStatus(test.status, test.exitCode)
+			if running != test.wantRunning || recognized != test.wantRecognized {
+				t.Fatalf("freeBSDStatus() = (%v, %v), want (%v, %v)", running, recognized, test.wantRunning, test.wantRecognized)
+			}
+		})
+	}
+}

@@ -37,20 +37,58 @@ func (linux *openWrtRecord) isInstalled() bool {
 	return false
 }
 
-// Check service is running
-func (linux *openWrtRecord) checkRunning() (string, bool) {
-	srvPath := linux.servicePath()
-	output, err := exec.Command(srvPath, "status").Output()
-	if openWrtStatusActive(string(output), commandExitCode(err)) {
-		return "Service is running...", true
-	}
+type openWrtServiceState uint8
 
-	return "Service is stopped", false
+const (
+	openWrtServiceUnknown openWrtServiceState = iota
+	openWrtServiceInactive
+	openWrtServiceNotRunning
+	openWrtServiceRunning
+)
+
+func (state openWrtServiceState) running() bool {
+	return state == openWrtServiceRunning
 }
 
-func openWrtStatusActive(status string, exitCode int) bool {
+func (state openWrtServiceState) startable() bool {
+	return state == openWrtServiceInactive || state == openWrtServiceNotRunning
+}
+
+func (state openWrtServiceState) stoppable() bool {
+	return state == openWrtServiceRunning || state == openWrtServiceNotRunning
+}
+
+func (linux *openWrtRecord) checkStatus() (string, openWrtServiceState, error) {
+	srvPath := linux.servicePath()
+	output, err := exec.Command(srvPath, "status").CombinedOutput()
+	state, recognized := openWrtStatus(string(output), commandExitCode(err))
+	if !recognized {
+		return "", openWrtServiceUnknown, statusCommandError("OpenWrt", linux.name, output, err)
+	}
+	if state == openWrtServiceRunning {
+		return "Service is running...", state, nil
+	}
+	return "Service is stopped", state, nil
+}
+
+// Check service is running
+func (linux *openWrtRecord) checkRunning() (string, bool, error) {
+	message, state, err := linux.checkStatus()
+	return message, state.running(), err
+}
+
+func openWrtStatus(status string, exitCode int) (openWrtServiceState, bool) {
 	status = strings.TrimSpace(status)
-	return exitCode == 0 && (status == "running" || strings.HasPrefix(status, "running ("))
+	if exitCode == 0 && (status == "running" || strings.HasPrefix(status, "running (") || status == "active with no instances") {
+		return openWrtServiceRunning, true
+	}
+	if exitCode == 3 && status == "inactive" {
+		return openWrtServiceInactive, true
+	}
+	if exitCode == 5 && status == "not running" {
+		return openWrtServiceNotRunning, true
+	}
+	return openWrtServiceUnknown, false
 }
 
 // Install the service
@@ -133,7 +171,11 @@ func (linux *openWrtRecord) Start() (string, error) {
 		return startAction + failed, ErrNotInstalled
 	}
 
-	if _, ok := linux.checkRunning(); ok {
+	_, state, err := linux.checkStatus()
+	if err != nil {
+		return startAction + failed, err
+	}
+	if !state.startable() {
 		return startAction + failed, ErrAlreadyRunning
 	}
 
@@ -156,6 +198,13 @@ func (linux *openWrtRecord) Stop() (string, error) {
 	if !linux.isInstalled() {
 		return stopAction + failed, ErrNotInstalled
 	}
+	_, state, err := linux.checkStatus()
+	if err != nil {
+		return stopAction + failed, err
+	}
+	if !state.stoppable() {
+		return stopAction + failed, ErrAlreadyStopped
+	}
 
 	srvPath := linux.servicePath()
 	if err := exec.Command(srvPath, "stop").Run(); err != nil {
@@ -176,9 +225,8 @@ func (linux *openWrtRecord) Status() (string, error) {
 		return statNotInstalled, ErrNotInstalled
 	}
 
-	statusAction, _ := linux.checkRunning()
-
-	return statusAction, nil
+	statusAction, _, err := linux.checkStatus()
+	return statusAction, err
 }
 
 const defaultOpenWrtConfig = `#!/bin/sh /etc/rc.common

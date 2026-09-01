@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"syscall"
 	"text/template"
 	"time"
@@ -69,9 +70,9 @@ func ListServiceStatuses() ([]ServiceStatus, error) {
 		return serviceDirectory{
 			path:   path,
 			suffix: ".plist",
-			isRunning: func(name string) bool {
-				_, running := (&darwinRecord{name: name, kind: kind}).checkRunning()
-				return running
+			isRunning: func(name string) (bool, error) {
+				_, running, err := (&darwinRecord{name: name, kind: kind}).checkRunning()
+				return running, err
 			},
 		}
 	}
@@ -127,34 +128,53 @@ func (darwin *darwinRecord) launchTarget() (string, error) {
 }
 
 // Check service is running
-func (darwin *darwinRecord) checkRunning() (string, bool) {
+func (darwin *darwinRecord) checkRunning() (string, bool, error) {
 	target, err := darwin.launchTarget()
 	if err != nil {
-		return "Service is stopped", false
+		return "", false, fmt.Errorf("resolve launchd target: %w", err)
 	}
-	output, err := exec.Command("launchctl", "print", target).Output()
-	if err == nil {
+	output, err := exec.Command("launchctl", "print", target).CombinedOutput()
+	running, recognized := launchdStatus(string(output), commandExitCode(err))
+	if !recognized {
+		return "", false, statusCommandError("launchd", darwin.name, output, err)
+	}
+	if running {
 		reg := regexp.MustCompile(`(?m)\bpid = ([0-9]+)\b`)
 		data := reg.FindStringSubmatch(string(output))
 		if len(data) > 1 {
-			return "Service (pid  " + data[1] + ") is running...", true
+			return "Service (pid  " + data[1] + ") is running...", true, nil
 		}
-		return "Service is loaded...", true
+		return "Service is loaded...", true, nil
 	}
-
-	return "Service is stopped", false
+	return "Service is stopped", false, nil
 }
 
-func waitForLaunchdStop(timeout, pollInterval time.Duration, running func() bool) error {
+func launchdStatus(status string, exitCode int) (running, recognized bool) {
+	if exitCode == 0 {
+		return true, true
+	}
+	if exitCode == 113 && strings.Contains(status, "Could not find service") {
+		return false, true
+	}
+	return false, false
+}
+
+func waitForLaunchdStop(timeout, pollInterval time.Duration, running func() (bool, error)) error {
 	deadline := time.Now().Add(timeout)
-	for running() {
+	for {
+		isRunning, err := running()
+		if err != nil {
+			return err
+		}
+		if !isRunning {
+			return nil
+		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			return errors.New("timed out waiting for launchd service to stop")
 		}
 		time.Sleep(min(pollInterval, remaining))
 	}
-	return nil
 }
 
 // Install the service
@@ -234,7 +254,9 @@ func (darwin *darwinRecord) Start() (string, error) {
 		return startAction + failed, ErrNotInstalled
 	}
 
-	if _, ok := darwin.checkRunning(); ok {
+	if _, running, err := darwin.checkRunning(); err != nil {
+		return startAction + failed, err
+	} else if running {
 		return startAction + failed, ErrAlreadyRunning
 	}
 
@@ -262,7 +284,9 @@ func (darwin *darwinRecord) Stop() (string, error) {
 		return stopAction + failed, ErrNotInstalled
 	}
 
-	if _, ok := darwin.checkRunning(); !ok {
+	if _, running, err := darwin.checkRunning(); err != nil {
+		return stopAction + failed, err
+	} else if !running {
 		return stopAction + failed, ErrAlreadyStopped
 	}
 
@@ -277,9 +301,9 @@ func (darwin *darwinRecord) Stop() (string, error) {
 	if waitTimeout < time.Duration(1<<63-1)-launchdStopWaitMargin {
 		waitTimeout += launchdStopWaitMargin
 	}
-	if err := waitForLaunchdStop(waitTimeout, launchdStopPollInterval, func() bool {
-		_, running := darwin.checkRunning()
-		return running
+	if err := waitForLaunchdStop(waitTimeout, launchdStopPollInterval, func() (bool, error) {
+		_, running, err := darwin.checkRunning()
+		return running, err
 	}); err != nil {
 		return stopAction + failed, err
 	}
@@ -299,9 +323,8 @@ func (darwin *darwinRecord) Status() (string, error) {
 		return statNotInstalled, ErrNotInstalled
 	}
 
-	statusAction, _ := darwin.checkRunning()
-
-	return statusAction, nil
+	statusAction, _, err := darwin.checkRunning()
+	return statusAction, err
 }
 
 const defaultPropertyList = `<?xml version="1.0" encoding="UTF-8"?>

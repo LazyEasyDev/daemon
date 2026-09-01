@@ -8,11 +8,11 @@ package daemon_util
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"text/template"
 )
 
@@ -52,12 +52,15 @@ func (bsd *bsdRecord) isEnabled() (bool, error) {
 	return false, err
 }
 
-func (bsd *bsdRecord) getCmd(cmd string) string {
-	if ok, err := bsd.isEnabled(); !ok || err != nil {
-		fmt.Println("Service is not enabled, using one" + cmd + " instead")
-		cmd = "one" + cmd
+func (bsd *bsdRecord) getCmd(cmd string) (string, error) {
+	enabled, err := bsd.isEnabled()
+	if err != nil {
+		return "", err
 	}
-	return cmd
+	if !enabled {
+		return "one" + cmd, nil
+	}
+	return cmd, nil
 }
 
 // Get the daemon properly
@@ -73,25 +76,43 @@ func newDaemon(name, description string, _ Kind, executablePath string) (Daemon,
 func ListServiceStatuses() ([]ServiceStatus, error) {
 	return listServiceStatuses(serviceDirectory{
 		path: "/usr/local/etc/rc.d",
-		isRunning: func(name string) bool {
-			return exec.Command("service", name, "onestatus").Run() == nil
+		isRunning: func(name string) (bool, error) {
+			_, running, err := (&bsdRecord{name: name}).checkRunning()
+			return running, err
 		},
 	})
 }
 
 // Check service is running
-func (bsd *bsdRecord) checkRunning() (string, bool) {
-	output, err := exec.Command("service", bsd.name, bsd.getCmd("status")).Output()
-	if err == nil {
+func (bsd *bsdRecord) checkRunning() (string, bool, error) {
+	command, err := bsd.getCmd("status")
+	if err != nil {
+		return "", false, statusCommandError("FreeBSD rc.d", bsd.name, nil, err)
+	}
+	output, err := exec.Command("service", bsd.name, command).CombinedOutput()
+	running, recognized := freeBSDStatus(string(output), commandExitCode(err))
+	if !recognized {
+		return "", false, statusCommandError("FreeBSD rc.d", bsd.name, output, err)
+	}
+	if running {
 		reg := regexp.MustCompile("pid  ([0-9]+)")
 		data := reg.FindStringSubmatch(string(output))
 		if len(data) > 1 {
-			return "Service (pid  " + data[1] + ") is running...", true
+			return "Service (pid  " + data[1] + ") is running...", true, nil
 		}
-		return "Service is running...", true
+		return "Service is running...", true, nil
 	}
+	return "Service is stopped", false, nil
+}
 
-	return "Service is stopped", false
+func freeBSDStatus(status string, exitCode int) (running, recognized bool) {
+	if exitCode == 0 {
+		return true, true
+	}
+	if exitCode == 1 && strings.Contains(strings.ToLower(status), "is not running") {
+		return false, true
+	}
+	return false, false
 }
 
 // Install the service
@@ -173,11 +194,17 @@ func (bsd *bsdRecord) Start() (string, error) {
 		return startAction + failed, ErrNotInstalled
 	}
 
-	if _, ok := bsd.checkRunning(); ok {
+	if _, running, err := bsd.checkRunning(); err != nil {
+		return startAction + failed, err
+	} else if running {
 		return startAction + failed, ErrAlreadyRunning
 	}
 
-	if err := exec.Command("service", bsd.name, bsd.getCmd("start")).Run(); err != nil {
+	command, err := bsd.getCmd("start")
+	if err != nil {
+		return startAction + failed, err
+	}
+	if err := exec.Command("service", bsd.name, command).Run(); err != nil {
 		return startAction + failed, err
 	}
 
@@ -196,11 +223,17 @@ func (bsd *bsdRecord) Stop() (string, error) {
 		return stopAction + failed, ErrNotInstalled
 	}
 
-	if _, ok := bsd.checkRunning(); !ok {
+	if _, running, err := bsd.checkRunning(); err != nil {
+		return stopAction + failed, err
+	} else if !running {
 		return stopAction + failed, ErrAlreadyStopped
 	}
 
-	if err := exec.Command("service", bsd.name, bsd.getCmd("stop")).Run(); err != nil {
+	command, err := bsd.getCmd("stop")
+	if err != nil {
+		return stopAction + failed, err
+	}
+	if err := exec.Command("service", bsd.name, command).Run(); err != nil {
 		return stopAction + failed, err
 	}
 
@@ -218,9 +251,8 @@ func (bsd *bsdRecord) Status() (string, error) {
 		return statNotInstalled, ErrNotInstalled
 	}
 
-	statusAction, _ := bsd.checkRunning()
-
-	return statusAction, nil
+	statusAction, _, err := bsd.checkRunning()
+	return statusAction, err
 }
 
 const defaultBSDConfig = `#!/bin/sh

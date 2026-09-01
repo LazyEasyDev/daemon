@@ -7,9 +7,11 @@ package daemon_util
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -98,7 +100,7 @@ type serviceDirectory struct {
 	path       string
 	filePrefix string
 	suffix     string
-	isRunning  func(string) bool
+	isRunning  func(string) (bool, error)
 }
 
 func listServiceStatuses(directories ...serviceDirectory) ([]ServiceStatus, error) {
@@ -127,8 +129,14 @@ func listServiceStatuses(directories ...serviceDirectory) ([]ServiceStatus, erro
 			}
 
 			status := ServiceStopped
-			if directory.isRunning != nil && directory.isRunning(registrationName) {
-				status = ServiceRunning
+			if directory.isRunning != nil {
+				running, err := directory.isRunning(registrationName)
+				if err != nil {
+					return nil, fmt.Errorf("query status for %s: %w", logicalName, err)
+				}
+				if running {
+					status = ServiceRunning
+				}
 			}
 			if current, exists := statuses[logicalName]; !exists || current != ServiceRunning {
 				statuses[logicalName] = status
@@ -184,6 +192,31 @@ func systemdQuoteArgs(args []string) string {
 
 func systemdConfigQuote(value string) string {
 	return strings.ReplaceAll(strconv.Quote(value), "%", "%%")
+}
+
+func statusCommandError(manager, name string, output []byte, err error) error {
+	detail := strings.TrimSpace(string(output))
+	if err != nil && detail != "" {
+		return fmt.Errorf("query %s status for %s: %w: %s", manager, name, err, detail)
+	}
+	if err != nil {
+		return fmt.Errorf("query %s status for %s: %w", manager, name, err)
+	}
+	if detail != "" {
+		return fmt.Errorf("query %s status for %s: unexpected response %q", manager, name, detail)
+	}
+	return fmt.Errorf("query %s status for %s: empty response", manager, name)
+}
+
+func commandExitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var exitError *exec.ExitError
+	if errors.As(err, &exitError) {
+		return exitError.ExitCode()
+	}
+	return -1
 }
 
 func writeTemplateFile(path, name, source string, funcs template.FuncMap, data any, mode fs.FileMode) error {

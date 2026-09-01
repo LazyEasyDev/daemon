@@ -38,14 +38,28 @@ func (linux *buildrootRecord) isInstalled() bool {
 }
 
 // Check service is running
-func (linux *buildrootRecord) checkRunning() (string, bool) {
+func (linux *buildrootRecord) checkRunning() (string, bool, error) {
 	srvPath := linux.servicePath()
-	output, err := exec.Command(srvPath, "status").Output()
-	if err == nil && strings.Contains(string(output), "running") {
-		return "Service is running...", true
+	output, err := exec.Command(srvPath, "status").CombinedOutput()
+	running, recognized := buildrootStatus(string(output), commandExitCode(err))
+	if !recognized {
+		return "", false, statusCommandError("Buildroot init", linux.name, output, err)
 	}
+	if running {
+		return "Service is running...", true, nil
+	}
+	return "Service is stopped", false, nil
+}
 
-	return "Service is stopped", false
+func buildrootStatus(status string, exitCode int) (running, recognized bool) {
+	status = strings.TrimSpace(status)
+	if exitCode == 0 && strings.Contains(status, " is running") {
+		return true, true
+	}
+	if exitCode == 3 && strings.Contains(status, " is stopped") {
+		return false, true
+	}
+	return false, false
 }
 
 // Install the service
@@ -118,7 +132,9 @@ func (linux *buildrootRecord) Start() (string, error) {
 		return startAction + failed, ErrNotInstalled
 	}
 
-	if _, ok := linux.checkRunning(); ok {
+	if _, running, err := linux.checkRunning(); err != nil {
+		return startAction + failed, err
+	} else if running {
 		return startAction + failed, ErrAlreadyRunning
 	}
 
@@ -142,7 +158,9 @@ func (linux *buildrootRecord) Stop() (string, error) {
 		return stopAction + failed, ErrNotInstalled
 	}
 
-	if _, ok := linux.checkRunning(); !ok {
+	if _, running, err := linux.checkRunning(); err != nil {
+		return stopAction + failed, err
+	} else if !running {
 		return stopAction + failed, ErrAlreadyStopped
 	}
 
@@ -165,8 +183,8 @@ func (linux *buildrootRecord) Status() (string, error) {
 		return statNotInstalled, ErrNotInstalled
 	}
 
-	statusAction, _ := linux.checkRunning()
-	return statusAction, nil
+	statusAction, _, err := linux.checkRunning()
+	return statusAction, err
 }
 
 const defaultBuildrootConfig = `#!/bin/sh

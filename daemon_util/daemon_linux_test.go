@@ -170,51 +170,120 @@ func TestOpenRCRespawnsWithoutRetryLimit(t *testing.T) {
 	}
 }
 
+func TestOpenRCStatus(t *testing.T) {
+	tests := []struct {
+		name           string
+		status         string
+		exitCode       int
+		wantState      openRCServiceState
+		wantRunning    bool
+		wantStartable  bool
+		wantStoppable  bool
+		wantRecognized bool
+	}{
+		{name: "running", status: "status: started", wantState: openRCServiceStarted, wantRunning: true, wantStoppable: true, wantRecognized: true},
+		{name: "stopped", status: "status: stopped", exitCode: 3, wantState: openRCServiceStopped, wantStartable: true, wantRecognized: true},
+		{name: "stopping", status: "status: stopping", exitCode: 4, wantState: openRCServiceStopping, wantRunning: true, wantStoppable: true, wantRecognized: true},
+		{name: "starting", status: "status: starting", exitCode: 8, wantState: openRCServiceStarting, wantRunning: true, wantStoppable: true, wantRecognized: true},
+		{name: "inactive", status: "status: inactive", exitCode: 16, wantState: openRCServiceInactive, wantStartable: true, wantStoppable: true, wantRecognized: true},
+		{name: "crashed", status: "status: crashed", exitCode: 32, wantState: openRCServiceCrashed, wantStoppable: true, wantRecognized: true},
+		{name: "unsupervised", status: "status: unsupervised", exitCode: 64, wantState: openRCServiceUnsupervised, wantStoppable: true, wantRecognized: true},
+		{name: "query failure", status: "permission denied", exitCode: 1},
+		{name: "mismatched output", status: "status: stopped", exitCode: 32},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			state, recognized := openRCStatus(test.status, test.exitCode)
+			if state != test.wantState || state.running() != test.wantRunning || state.startable() != test.wantStartable || state.stoppable() != test.wantStoppable || recognized != test.wantRecognized {
+				t.Fatalf("openRCStatus() = (%v, %v, %v, %v, %v), want (%v, %v, %v, %v, %v)", state, state.running(), state.startable(), state.stoppable(), recognized, test.wantState, test.wantRunning, test.wantStartable, test.wantStoppable, test.wantRecognized)
+			}
+		})
+	}
+}
+
 func TestUpstartRespawnsWithoutRetryLimit(t *testing.T) {
 	if !strings.Contains(defaultUpstartConfig, "respawn limit 0 5") {
 		t.Fatal("Upstart config must respawn without a retry limit")
 	}
 }
 
-func TestUpstartStatusActive(t *testing.T) {
+func TestUpstartStatus(t *testing.T) {
 	tests := []struct {
-		status string
-		want   bool
+		status         string
+		exitCode       int
+		wantRunning    bool
+		wantRecognized bool
 	}{
-		{status: "worker start/starting", want: true},
-		{status: "worker start/pre-start, process 101", want: true},
-		{status: "worker start/spawned, process 102", want: true},
-		{status: "worker start/post-start, process 103", want: true},
-		{status: "worker start/running, process 104", want: true},
-		{status: "worker stop/stopping, process 104"},
-		{status: "worker stop/waiting"},
+		{status: "worker start/starting", wantRunning: true, wantRecognized: true},
+		{status: "worker start/pre-start, process 101", wantRunning: true, wantRecognized: true},
+		{status: "worker start/spawned, process 102", wantRunning: true, wantRecognized: true},
+		{status: "worker start/post-start, process 103", wantRunning: true, wantRecognized: true},
+		{status: "worker start/running, process 104", wantRunning: true, wantRecognized: true},
+		{status: "worker stop/stopping, process 104", wantRunning: true, wantRecognized: true},
+		{status: "worker stop/waiting", wantRecognized: true},
 		{status: "other start/running, process 104"},
+		{status: "worker stop/waiting", exitCode: 1},
 	}
 
 	for _, test := range tests {
-		if got := upstartStatusActive("worker", test.status); got != test.want {
-			t.Errorf("upstartStatusActive(%q) = %v, want %v", test.status, got, test.want)
+		gotRunning, gotRecognized := upstartStatus("worker", test.status, test.exitCode)
+		if gotRunning != test.wantRunning || gotRecognized != test.wantRecognized {
+			t.Errorf("upstartStatus(%q, %d) = (%v, %v), want (%v, %v)", test.status, test.exitCode, gotRunning, gotRecognized, test.wantRunning, test.wantRecognized)
 		}
 	}
 }
 
-func TestSystemDStatusActive(t *testing.T) {
+func TestGeneratedInitStatus(t *testing.T) {
 	tests := []struct {
-		status string
-		want   bool
+		name           string
+		status         string
+		exitCode       int
+		wantRunning    bool
+		wantRecognized bool
 	}{
-		{status: "active", want: true},
-		{status: "activating", want: true},
-		{status: "reloading", want: true},
-		{status: "refreshing", want: true},
-		{status: "inactive"},
-		{status: "failed"},
-		{status: "deactivating"},
+		{name: "Buildroot running", status: "worker is running (pid 42)", wantRunning: true, wantRecognized: true},
+		{name: "Buildroot stopped", status: "worker is stopped", exitCode: 3, wantRecognized: true},
+		{name: "Buildroot failure", status: "permission denied", exitCode: 1},
+		{name: "System V running", status: "worker (pid  42) is running...", wantRunning: true, wantRecognized: true},
+		{name: "System V stopped", status: "worker is stopped", exitCode: 3, wantRecognized: true},
 	}
 
 	for _, test := range tests {
-		if got := systemDStatusActive(test.status); got != test.want {
-			t.Errorf("systemDStatusActive(%q) = %v, want %v", test.status, got, test.want)
+		t.Run(test.name, func(t *testing.T) {
+			var running, recognized bool
+			if strings.HasPrefix(test.name, "Buildroot") {
+				running, recognized = buildrootStatus(test.status, test.exitCode)
+			} else {
+				running, recognized = systemVStatus("worker", test.status, test.exitCode)
+			}
+			if running != test.wantRunning || recognized != test.wantRecognized {
+				t.Fatalf("status = (%v, %v), want (%v, %v)", running, recognized, test.wantRunning, test.wantRecognized)
+			}
+		})
+	}
+}
+
+func TestSystemDStatus(t *testing.T) {
+	tests := []struct {
+		status         string
+		wantRunning    bool
+		wantRecognized bool
+	}{
+		{status: "active", wantRunning: true, wantRecognized: true},
+		{status: "activating", wantRunning: true, wantRecognized: true},
+		{status: "reloading", wantRunning: true, wantRecognized: true},
+		{status: "refreshing", wantRunning: true, wantRecognized: true},
+		{status: "inactive", wantRecognized: true},
+		{status: "failed", wantRecognized: true},
+		{status: "deactivating", wantRunning: true, wantRecognized: true},
+		{status: "access denied"},
+	}
+
+	for _, test := range tests {
+		gotRunning, gotRecognized := systemDStatus(test.status)
+		if gotRunning != test.wantRunning || gotRecognized != test.wantRecognized {
+			t.Errorf("systemDStatus(%q) = (%v, %v), want (%v, %v)", test.status, gotRunning, gotRecognized, test.wantRunning, test.wantRecognized)
 		}
 	}
 }
@@ -227,21 +296,28 @@ func TestSystemDStopsControlGroup(t *testing.T) {
 
 func TestOpenWrtStatusActive(t *testing.T) {
 	tests := []struct {
-		status   string
-		exitCode int
-		want     bool
+		status         string
+		exitCode       int
+		wantState      openWrtServiceState
+		wantRunning    bool
+		wantStartable  bool
+		wantStoppable  bool
+		wantRecognized bool
 	}{
-		{status: "running", want: true},
-		{status: "running (1/2)", want: true},
-		{status: "not running", exitCode: 5},
-		{status: "inactive", exitCode: 3},
+		{status: "running", wantState: openWrtServiceRunning, wantRunning: true, wantStoppable: true, wantRecognized: true},
+		{status: "running (1/2)", wantState: openWrtServiceRunning, wantRunning: true, wantStoppable: true, wantRecognized: true},
+		{status: "active with no instances", wantState: openWrtServiceRunning, wantRunning: true, wantStoppable: true, wantRecognized: true},
+		{status: "inactive", exitCode: 3, wantState: openWrtServiceInactive, wantStartable: true, wantRecognized: true},
+		{status: "not running", exitCode: 5, wantState: openWrtServiceNotRunning, wantStartable: true, wantStoppable: true, wantRecognized: true},
+		{status: "not running", exitCode: 3},
 		{status: "not running", exitCode: 1},
 		{status: "unknown instance", exitCode: 4},
 	}
 
 	for _, test := range tests {
-		if got := openWrtStatusActive(test.status, test.exitCode); got != test.want {
-			t.Errorf("openWrtStatusActive(%q, %d) = %v, want %v", test.status, test.exitCode, got, test.want)
+		gotState, gotRecognized := openWrtStatus(test.status, test.exitCode)
+		if gotState != test.wantState || gotState.running() != test.wantRunning || gotState.startable() != test.wantStartable || gotState.stoppable() != test.wantStoppable || gotRecognized != test.wantRecognized {
+			t.Errorf("openWrtStatus(%q, %d) = (%v, %v, %v, %v, %v), want (%v, %v, %v, %v, %v)", test.status, test.exitCode, gotState, gotState.running(), gotState.startable(), gotState.stoppable(), gotRecognized, test.wantState, test.wantRunning, test.wantStartable, test.wantStoppable, test.wantRecognized)
 		}
 	}
 }

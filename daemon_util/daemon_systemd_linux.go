@@ -38,21 +38,26 @@ func (linux *systemDRecord) isInstalled() bool {
 }
 
 // Check service is running
-func (linux *systemDRecord) checkRunning() (string, bool) {
-	output, _ := exec.Command("systemctl", "is-active", linux.name+".service").Output()
-	if systemDStatusActive(string(output)) {
-		return "Service is running...", true
+func (linux *systemDRecord) checkRunning() (string, bool, error) {
+	output, err := exec.Command("systemctl", "is-active", linux.name+".service").CombinedOutput()
+	running, recognized := systemDStatus(string(output))
+	if !recognized || err != nil && commandExitCode(err) != 3 {
+		return "", false, statusCommandError("systemd", linux.name, output, err)
 	}
-
-	return "Service is stopped", false
+	if running {
+		return "Service is running...", true, nil
+	}
+	return "Service is stopped", false, nil
 }
 
-func systemDStatusActive(status string) bool {
+func systemDStatus(status string) (running, recognized bool) {
 	switch strings.TrimSpace(status) {
-	case "active", "activating", "reloading", "refreshing":
-		return true
+	case "active", "activating", "reloading", "refreshing", "deactivating":
+		return true, true
+	case "inactive", "failed":
+		return false, true
 	default:
-		return false
+		return false, false
 	}
 }
 
@@ -153,7 +158,9 @@ func (linux *systemDRecord) Start() (string, error) {
 		return startAction + failed, ErrNotInstalled
 	}
 
-	if _, ok := linux.checkRunning(); ok {
+	if _, running, err := linux.checkRunning(); err != nil {
+		return startAction + failed, err
+	} else if running {
 		return startAction + failed, ErrAlreadyRunning
 	}
 
@@ -175,6 +182,11 @@ func (linux *systemDRecord) Stop() (string, error) {
 	if !linux.isInstalled() {
 		return stopAction + failed, ErrNotInstalled
 	}
+	if _, running, err := linux.checkRunning(); err != nil {
+		return stopAction + failed, err
+	} else if !running {
+		return stopAction + failed, ErrAlreadyStopped
+	}
 
 	if err := exec.Command("systemctl", "stop", linux.name+".service").Run(); err != nil {
 		return stopAction + failed, err
@@ -194,9 +206,8 @@ func (linux *systemDRecord) Status() (string, error) {
 		return statNotInstalled, ErrNotInstalled
 	}
 
-	statusAction, _ := linux.checkRunning()
-
-	return statusAction, nil
+	statusAction, _, err := linux.checkRunning()
+	return statusAction, err
 }
 
 const defaultSystemDConfig = `[Unit]

@@ -2,6 +2,8 @@ package daemon_util
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -72,5 +74,23 @@ func TestServiceConfigRejectsInvalidStopTimeout(t *testing.T) {
 		if err := new(serviceConfig).SetStopTimeout(timeout); !errors.Is(err, ErrInvalidStopTimeout) {
 			t.Errorf("SetStopTimeout(%v) error = %v, want %v", timeout, err, ErrInvalidStopTimeout)
 		}
+	}
+}
+
+func TestListServiceStatusesPropagatesStatusError(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, managedServicePrefix+"worker"), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	queryErr := errors.New("status unavailable")
+	_, err := listServiceStatuses(serviceDirectory{
+		path: directory,
+		isRunning: func(string) (bool, error) {
+			return false, queryErr
+		},
+	})
+	if !errors.Is(err, queryErr) {
+		t.Fatalf("listServiceStatuses() error = %v, want %v", err, queryErr)
 	}
 }

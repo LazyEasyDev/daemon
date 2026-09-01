@@ -8,8 +8,6 @@
 package daemon_util
 
 import (
-	"errors"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,7 +20,6 @@ var openwrtNameArr = []string{
 
 type linuxBackend struct {
 	name             string
-	warning          bool
 	detected         func(string) bool
 	serviceDirectory func(string) serviceDirectory
 	newRecord        func(string, string, string) (Daemon, error)
@@ -39,9 +36,9 @@ var linuxBackends = []linuxBackend{
 			return serviceDirectory{
 				path:   filepath.Join(root, "etc/systemd/system"),
 				suffix: ".service",
-				isRunning: func(name string) bool {
-					_, running := (&systemDRecord{name: name}).checkRunning()
-					return running
+				isRunning: func(name string) (bool, error) {
+					_, running, err := (&systemDRecord{name: name}).checkRunning()
+					return running, err
 				},
 			}
 		},
@@ -55,9 +52,9 @@ var linuxBackends = []linuxBackend{
 		serviceDirectory: func(root string) serviceDirectory {
 			return serviceDirectory{
 				path: filepath.Join(root, "etc/init.d"),
-				isRunning: func(name string) bool {
-					_, running := (&openRCRecord{name: name}).checkRunning()
-					return running
+				isRunning: func(name string) (bool, error) {
+					_, running, err := (&openRCRecord{name: name}).checkRunning()
+					return running, err
 				},
 			}
 		},
@@ -75,9 +72,9 @@ var linuxBackends = []linuxBackend{
 			return serviceDirectory{
 				path:   filepath.Join(root, "etc/init"),
 				suffix: ".conf",
-				isRunning: func(name string) bool {
-					_, running := (&upstartRecord{name: name}).checkRunning()
-					return running
+				isRunning: func(name string) (bool, error) {
+					_, running, err := (&upstartRecord{name: name}).checkRunning()
+					return running, err
 				},
 			}
 		},
@@ -93,9 +90,9 @@ var linuxBackends = []linuxBackend{
 		serviceDirectory: func(root string) serviceDirectory {
 			return serviceDirectory{
 				path: filepath.Join(root, "etc/init.d"),
-				isRunning: func(name string) bool {
-					_, running := (&openWrtRecord{name: name}).checkRunning()
-					return running
+				isRunning: func(name string) (bool, error) {
+					_, running, err := (&openWrtRecord{name: name}).checkRunning()
+					return running, err
 				},
 			}
 		},
@@ -110,9 +107,9 @@ var linuxBackends = []linuxBackend{
 			return serviceDirectory{
 				path:       filepath.Join(root, "etc/init.d"),
 				filePrefix: "S90",
-				isRunning: func(name string) bool {
-					_, running := (&buildrootRecord{name: name}).checkRunning()
-					return running
+				isRunning: func(name string) (bool, error) {
+					_, running, err := (&buildrootRecord{name: name}).checkRunning()
+					return running, err
 				},
 			}
 		},
@@ -122,14 +119,13 @@ var linuxBackends = []linuxBackend{
 	},
 	{
 		name:     "systemV",
-		warning:  true,
 		detected: systemVDetected,
 		serviceDirectory: func(root string) serviceDirectory {
 			return serviceDirectory{
 				path: filepath.Join(root, "etc/init.d"),
-				isRunning: func(name string) bool {
-					_, running := (&systemVRecord{name: name}).checkRunning()
-					return running
+				isRunning: func(name string) (bool, error) {
+					_, running, err := (&systemVRecord{name: name}).checkRunning()
+					return running, err
 				},
 			}
 		},
@@ -148,17 +144,6 @@ func ListServiceStatuses() ([]ServiceStatus, error) {
 	return listServiceStatuses(backend.serviceDirectory("/"))
 }
 
-func commandExitCode(err error) int {
-	if err == nil {
-		return 0
-	}
-	var exitError *exec.ExitError
-	if errors.As(err, &exitError) {
-		return exitError.ExitCode()
-	}
-	return -1
-}
-
 // Get the daemon properly
 func newDaemon(name, description string, _ Kind, executablePath string) (Daemon, error) {
 	backend, err := detectLinuxBackend("/")
@@ -168,11 +153,6 @@ func newDaemon(name, description string, _ Kind, executablePath string) (Daemon,
 	record, err := backend.newRecord(name, description, executablePath)
 	if err != nil {
 		return nil, err
-	}
-	if backend.warning {
-		log.Printf("[warning] using default %s type\n", backend.name)
-	} else {
-		log.Printf("[info] %s detected\n", backend.name)
 	}
 	return record, nil
 }

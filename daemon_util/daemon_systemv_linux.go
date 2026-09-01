@@ -41,20 +41,32 @@ func (linux *systemVRecord) isInstalled() bool {
 }
 
 // Check service is running
-func (linux *systemVRecord) checkRunning() (string, bool) {
-	output, err := exec.Command("service", linux.name, "status").Output()
-	if err == nil {
-		if matched, err := regexp.MatchString(linux.name, string(output)); err == nil && matched {
-			reg := regexp.MustCompile("pid  ([0-9]+)")
-			data := reg.FindStringSubmatch(string(output))
-			if len(data) > 1 {
-				return "Service (pid  " + data[1] + ") is running...", true
-			}
-			return "Service is running...", true
-		}
+func (linux *systemVRecord) checkRunning() (string, bool, error) {
+	output, err := exec.Command("service", linux.name, "status").CombinedOutput()
+	running, recognized := systemVStatus(linux.name, string(output), commandExitCode(err))
+	if !recognized {
+		return "", false, statusCommandError("System V", linux.name, output, err)
 	}
+	if running {
+		reg := regexp.MustCompile("pid  ([0-9]+)")
+		data := reg.FindStringSubmatch(string(output))
+		if len(data) > 1 {
+			return "Service (pid  " + data[1] + ") is running...", true, nil
+		}
+		return "Service is running...", true, nil
+	}
+	return "Service is stopped", false, nil
+}
 
-	return "Service is stopped", false
+func systemVStatus(name, status string, exitCode int) (running, recognized bool) {
+	status = strings.TrimSpace(status)
+	if exitCode == 0 && strings.Contains(status, name) && strings.Contains(status, " is running") {
+		return true, true
+	}
+	if exitCode == 3 && strings.Contains(status, name) && strings.Contains(status, " is stopped") {
+		return false, true
+	}
+	return false, false
 }
 
 // Install the service
@@ -142,7 +154,9 @@ func (linux *systemVRecord) Start() (string, error) {
 		return startAction + failed, ErrNotInstalled
 	}
 
-	if _, ok := linux.checkRunning(); ok {
+	if _, running, err := linux.checkRunning(); err != nil {
+		return startAction + failed, err
+	} else if running {
 		return startAction + failed, ErrAlreadyRunning
 	}
 
@@ -165,7 +179,9 @@ func (linux *systemVRecord) Stop() (string, error) {
 		return stopAction + failed, ErrNotInstalled
 	}
 
-	if _, ok := linux.checkRunning(); !ok {
+	if _, running, err := linux.checkRunning(); err != nil {
+		return stopAction + failed, err
+	} else if !running {
 		return stopAction + failed, ErrAlreadyStopped
 	}
 
@@ -187,9 +203,8 @@ func (linux *systemVRecord) Status() (string, error) {
 		return statNotInstalled, ErrNotInstalled
 	}
 
-	statusAction, _ := linux.checkRunning()
-
-	return statusAction, nil
+	statusAction, _, err := linux.checkRunning()
+	return statusAction, err
 }
 
 func (linux *systemVRecord) serviceLinks() []string {

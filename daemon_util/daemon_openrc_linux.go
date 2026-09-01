@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"text/template"
 )
 
@@ -35,11 +36,80 @@ func (linux *openRCRecord) isInstalled() bool {
 	return err == nil
 }
 
-func (linux *openRCRecord) checkRunning() (string, bool) {
-	if err := exec.Command("rc-service", linux.name, "status").Run(); err == nil {
-		return "Service is running...", true
+type openRCServiceState uint8
+
+const (
+	openRCServiceUnknown openRCServiceState = iota
+	openRCServiceStopped
+	openRCServiceStarted
+	openRCServiceStopping
+	openRCServiceStarting
+	openRCServiceInactive
+	openRCServiceCrashed
+	openRCServiceUnsupervised
+)
+
+func (state openRCServiceState) running() bool {
+	return state == openRCServiceStarted || state == openRCServiceStarting || state == openRCServiceStopping
+}
+
+func (state openRCServiceState) startable() bool {
+	return state == openRCServiceStopped || state == openRCServiceInactive
+}
+
+func (state openRCServiceState) stoppable() bool {
+	return state != openRCServiceUnknown && state != openRCServiceStopped
+}
+
+func (linux *openRCRecord) checkStatus() (string, openRCServiceState, error) {
+	output, err := exec.Command("rc-service", linux.name, "status").CombinedOutput()
+	state, recognized := openRCStatus(string(output), commandExitCode(err))
+	if !recognized {
+		return "", openRCServiceUnknown, statusCommandError("OpenRC", linux.name, output, err)
 	}
-	return "Service is stopped", false
+
+	switch state {
+	case openRCServiceStarted:
+		return "Service is running...", state, nil
+	case openRCServiceStopping:
+		return "Service is stopping...", state, nil
+	case openRCServiceStarting:
+		return "Service is starting...", state, nil
+	case openRCServiceInactive:
+		return "Service is inactive", state, nil
+	case openRCServiceCrashed:
+		return "Service has crashed", state, nil
+	case openRCServiceUnsupervised:
+		return "Service is unsupervised", state, nil
+	default:
+		return "Service is stopped", state, nil
+	}
+}
+
+func (linux *openRCRecord) checkRunning() (string, bool, error) {
+	message, state, err := linux.checkStatus()
+	return message, state.running(), err
+}
+
+func openRCStatus(status string, exitCode int) (openRCServiceState, bool) {
+	status = strings.ToLower(strings.TrimSpace(status))
+	tests := map[int]struct {
+		text  string
+		state openRCServiceState
+	}{
+		0:  {text: "status: started", state: openRCServiceStarted},
+		3:  {text: "status: stopped", state: openRCServiceStopped},
+		4:  {text: "status: stopping", state: openRCServiceStopping},
+		8:  {text: "status: starting", state: openRCServiceStarting},
+		16: {text: "status: inactive", state: openRCServiceInactive},
+		32: {text: "status: crashed", state: openRCServiceCrashed},
+		64: {text: "status: unsupervised", state: openRCServiceUnsupervised},
+	}
+	test, ok := tests[exitCode]
+	if ok && strings.Contains(status, test.text) {
+		return test.state, true
+	}
+	return openRCServiceUnknown, false
 }
 
 func (linux *openRCRecord) Install(args ...string) (string, error) {
@@ -110,7 +180,11 @@ func (linux *openRCRecord) Start() (string, error) {
 	if !linux.isInstalled() {
 		return startAction + failed, ErrNotInstalled
 	}
-	if _, running := linux.checkRunning(); running {
+	_, state, err := linux.checkStatus()
+	if err != nil {
+		return startAction + failed, err
+	}
+	if !state.startable() {
 		return startAction + failed, ErrAlreadyRunning
 	}
 	if err := exec.Command("rc-service", linux.name, "start").Run(); err != nil {
@@ -129,7 +203,11 @@ func (linux *openRCRecord) Stop() (string, error) {
 	if !linux.isInstalled() {
 		return stopAction + failed, ErrNotInstalled
 	}
-	if _, running := linux.checkRunning(); !running {
+	_, state, err := linux.checkStatus()
+	if err != nil {
+		return stopAction + failed, err
+	}
+	if !state.stoppable() {
 		return stopAction + failed, ErrAlreadyStopped
 	}
 	if err := exec.Command("rc-service", linux.name, "stop").Run(); err != nil {
@@ -147,8 +225,8 @@ func (linux *openRCRecord) Status() (string, error) {
 		return statNotInstalled, ErrNotInstalled
 	}
 
-	status, _ := linux.checkRunning()
-	return status, nil
+	status, _, err := linux.checkStatus()
+	return status, err
 }
 
 const defaultOpenRCConfig = `#!/sbin/openrc-run

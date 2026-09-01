@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"text/template"
 )
 
@@ -38,23 +39,38 @@ func (linux *upstartRecord) isInstalled() bool {
 }
 
 // Check service is running
-func (linux *upstartRecord) checkRunning() (string, bool) {
-	output, err := exec.Command("status", linux.name).Output()
-	if err == nil && upstartStatusActive(linux.name, string(output)) {
+func (linux *upstartRecord) checkRunning() (string, bool, error) {
+	output, err := exec.Command("status", linux.name).CombinedOutput()
+	running, recognized := upstartStatus(linux.name, string(output), commandExitCode(err))
+	if !recognized {
+		return "", false, statusCommandError("Upstart", linux.name, output, err)
+	}
+	if running {
 		reg := regexp.MustCompile("process ([0-9]+)")
 		data := reg.FindStringSubmatch(string(output))
 		if len(data) > 1 {
-			return "Service (pid  " + data[1] + ") is running...", true
+			return "Service (pid  " + data[1] + ") is running...", true, nil
 		}
-		return "Service is running...", true
+		return "Service is running...", true, nil
 	}
-
-	return "Service is stopped", false
+	return "Service is stopped", false, nil
 }
 
-func upstartStatusActive(name, status string) bool {
-	matched, err := regexp.MatchString(`^`+regexp.QuoteMeta(name)+` start/`, status)
-	return err == nil && matched
+func upstartStatus(name, status string, exitCode int) (running, recognized bool) {
+	if exitCode != 0 {
+		return false, false
+	}
+	status = strings.TrimSpace(status)
+	if strings.HasPrefix(status, name+" start/") {
+		return true, true
+	}
+	if strings.HasPrefix(status, name+" stop/waiting") {
+		return false, true
+	}
+	if strings.HasPrefix(status, name+" stop/") {
+		return true, true
+	}
+	return false, false
 }
 
 // Install the service
@@ -128,7 +144,9 @@ func (linux *upstartRecord) Start() (string, error) {
 		return startAction + failed, ErrNotInstalled
 	}
 
-	if _, ok := linux.checkRunning(); ok {
+	if _, running, err := linux.checkRunning(); err != nil {
+		return startAction + failed, err
+	} else if running {
 		return startAction + failed, ErrAlreadyRunning
 	}
 
@@ -151,7 +169,9 @@ func (linux *upstartRecord) Stop() (string, error) {
 		return stopAction + failed, ErrNotInstalled
 	}
 
-	if _, ok := linux.checkRunning(); !ok {
+	if _, running, err := linux.checkRunning(); err != nil {
+		return stopAction + failed, err
+	} else if !running {
 		return stopAction + failed, ErrAlreadyStopped
 	}
 
@@ -173,9 +193,8 @@ func (linux *upstartRecord) Status() (string, error) {
 		return statNotInstalled, ErrNotInstalled
 	}
 
-	statusAction, _ := linux.checkRunning()
-
-	return statusAction, nil
+	statusAction, _, err := linux.checkRunning()
+	return statusAction, err
 }
 
 const defaultUpstartConfig = `# {{.Name}} {{.Description}}

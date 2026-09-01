@@ -8,10 +8,12 @@ package daemon_util
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"text/template"
 )
 
@@ -73,6 +75,10 @@ func (linux *systemVRecord) Install(args ...string) (string, error) {
 	if err != nil {
 		return installAction + failed, err
 	}
+	links, hasStartLink := linux.existingServiceLinks()
+	if !hasStartLink {
+		return installAction + failed, fmt.Errorf("%w: no System V start runlevel directories found", ErrUnsupportedSystem)
+	}
 
 	funcs := template.FuncMap{
 		"shellQuote": shellQuote,
@@ -91,7 +97,7 @@ func (linux *systemVRecord) Install(args ...string) (string, error) {
 		return installAction + failed, err
 	}
 
-	if err := createServiceLinks(srvPath, linux.serviceLinks()); err != nil {
+	if err := createServiceLinks(srvPath, links); err != nil {
 		_ = os.Remove(srvPath)
 		return installAction + failed, err
 	}
@@ -187,14 +193,38 @@ func (linux *systemVRecord) Status() (string, error) {
 }
 
 func (linux *systemVRecord) serviceLinks() []string {
+	return systemVServiceLinks("/", linux.name)
+}
+
+func (linux *systemVRecord) existingServiceLinks() ([]string, bool) {
+	return existingSystemVServiceLinks("/", linux.name)
+}
+
+func systemVServiceLinks(root, name string) []string {
 	links := make([]string, 0, 7)
 	for _, runlevel := range [...]string{"2", "3", "4", "5"} {
-		links = append(links, "/etc/rc"+runlevel+".d/S87"+linux.name)
+		directory := filepath.Join(root, "etc", "rc"+runlevel+".d")
+		links = append(links, filepath.Join(directory, "S87"+name))
 	}
 	for _, runlevel := range [...]string{"0", "1", "6"} {
-		links = append(links, "/etc/rc"+runlevel+".d/K17"+linux.name)
+		directory := filepath.Join(root, "etc", "rc"+runlevel+".d")
+		links = append(links, filepath.Join(directory, "K17"+name))
 	}
 	return links
+}
+
+func existingSystemVServiceLinks(root, name string) ([]string, bool) {
+	links := make([]string, 0, 7)
+	hasStartLink := false
+	for _, link := range systemVServiceLinks(root, name) {
+		if info, err := os.Stat(filepath.Dir(link)); err == nil && info.IsDir() {
+			links = append(links, link)
+			if strings.HasPrefix(filepath.Base(link), "S") {
+				hasStartLink = true
+			}
+		}
+	}
+	return links, hasStartLink
 }
 
 const defaultSystemVConfig = `#! /bin/sh

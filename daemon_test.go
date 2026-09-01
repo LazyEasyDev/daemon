@@ -7,6 +7,20 @@ import (
 	"time"
 )
 
+type notifyingBuffer struct {
+	bytes.Buffer
+	written chan struct{}
+}
+
+func (buffer *notifyingBuffer) Write(data []byte) (int, error) {
+	written, err := buffer.Buffer.Write(data)
+	select {
+	case buffer.written <- struct{}{}:
+	default:
+	}
+	return written, err
+}
+
 func TestFormatStopProgress(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -38,9 +52,16 @@ func TestStopProgressWaitsBeforeDisplaying(t *testing.T) {
 }
 
 func TestStopProgressDisplaysAndClears(t *testing.T) {
-	var output bytes.Buffer
+	output := notifyingBuffer{written: make(chan struct{}, 1)}
 	finish := beginStopProgress(&output, "worker", 45*time.Second, time.Millisecond)
-	<-time.After(5 * time.Millisecond)
+	timeout := time.NewTimer(5 * time.Second)
+	defer timeout.Stop()
+	select {
+	case <-output.written:
+	case <-timeout.C:
+		finish()
+		t.Fatal("timed out waiting for stop progress output")
+	}
 	finish()
 
 	got := output.String()

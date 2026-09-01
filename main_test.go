@@ -206,7 +206,7 @@ func TestWriteServiceList(t *testing.T) {
 	}
 }
 
-func TestStopIfRunning(t *testing.T) {
+func TestStopIfRunningWithProgress(t *testing.T) {
 	stopFailure := errors.New("stop failed")
 	tests := []struct {
 		name    string
@@ -220,9 +220,9 @@ func TestStopIfRunning(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			err := stopIfRunning(stopStub{err: test.err})
+			err := stopIfRunningWithProgress("worker", stopStub{err: test.err})
 			if !errors.Is(err, test.wantErr) {
-				t.Fatalf("stopIfRunning() error = %v, want %v", err, test.wantErr)
+				t.Fatalf("stopIfRunningWithProgress() error = %v, want %v", err, test.wantErr)
 			}
 		})
 	}

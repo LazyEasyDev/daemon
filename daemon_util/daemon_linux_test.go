@@ -355,6 +355,47 @@ func TestSystemVDetected(t *testing.T) {
 	}
 }
 
+func TestSystemVServiceLinksUseExistingRunlevelDirectories(t *testing.T) {
+	root := t.TempDir()
+	for _, runlevel := range []string{"2", "5", "6"} {
+		if err := os.MkdirAll(filepath.Join(root, "etc", "rc"+runlevel+".d"), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "etc", "rc3.d"), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	links, hasStartLink := existingSystemVServiceLinks(root, "worker")
+	want := []string{
+		filepath.Join(root, "etc", "rc2.d", "S87worker"),
+		filepath.Join(root, "etc", "rc5.d", "S87worker"),
+		filepath.Join(root, "etc", "rc6.d", "K17worker"),
+	}
+	if strings.Join(links, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("systemVServiceLinks() = %q, want %q", links, want)
+	}
+	if !hasStartLink {
+		t.Fatal("systemVServiceLinks() did not report an existing start runlevel")
+	}
+}
+
+func TestSystemVServiceLinksRequireStartRunlevel(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "etc", "rc0.d"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	links, hasStartLink := existingSystemVServiceLinks(root, "worker")
+	want := []string{filepath.Join(root, "etc", "rc0.d", "K17worker")}
+	if strings.Join(links, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("systemVServiceLinks() = %q, want %q", links, want)
+	}
+	if hasStartLink {
+		t.Fatal("systemVServiceLinks() reported a missing start runlevel")
+	}
+}
+
 func TestBuildrootStyleInitDetected(t *testing.T) {
 	tests := []struct {
 		name       string

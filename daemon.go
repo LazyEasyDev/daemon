@@ -265,14 +265,6 @@ func formatStopProgress(serviceName string, elapsed, approximateWait time.Durati
 	return fmt.Sprintf("Stopping %s... %ds elapsed", serviceName, seconds)
 }
 
-func stopIfRunning(service stoppable) error {
-	_, err := service.Stop()
-	if errors.Is(err, daemon_util.ErrAlreadyStopped) {
-		return nil
-	}
-	return err
-}
-
 func status(_ context.Context, command *cli.Command) error {
 	serviceName, err := requiredServiceName(command)
 	if err != nil {

@@ -198,6 +198,7 @@ USE_PROCD=1
 DAEMON={{shellQuote .Name}}
 PROG={{shellQuote .Path}}
 WORKING_DIRECTORY={{shellQuote .WorkingDirectory}}
+STOP_TIMEOUT={{.StopTimeoutSeconds}}
 
 start_service() {
 	echo "start ${DAEMON} service!"
@@ -207,12 +208,24 @@ start_service() {
 
 	# threshold:0; timeout:30; retry:0 (unlimited)
 	procd_set_param respawn 0 30 0
-	procd_set_param term_timeout {{.StopTimeoutSeconds}}
+	procd_set_param term_timeout "$STOP_TIMEOUT"
 	
 	# run
 	procd_set_param command /bin/sh -c 'cd "$1" && shift && exec "$@"' sh "$WORKING_DIRECTORY" "$PROG" {{.Args}}
 
 	procd_close_instance
+}
+
+service_stopped() {
+	elapsed=0
+	while procd_running "$DAEMON"; do
+		if [ "$elapsed" -ge $((STOP_TIMEOUT + 5)) ]; then
+			echo "$DAEMON failed to stop" >&2
+			return 1
+		fi
+		sleep 1
+		elapsed=$((elapsed + 1))
+	done
 }
 
 restart() {

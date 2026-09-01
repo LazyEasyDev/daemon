@@ -71,22 +71,3 @@ func TestResolveExecutablePathRejectsDirectScript(t *testing.T) {
 		t.Fatalf("resolveExecutablePath(script) error = %v, want ErrInvalidExecutablePath", err)
 	}
 }
-
-func TestResolveExecutablePathOnlyChecksNativeMagic(t *testing.T) {
-	executable, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	magic, err := readExecutableMagic(executable)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	truncated := filepath.Join(t.TempDir(), "truncated-executable")
-	if err := os.WriteFile(truncated, magic[:], 0755); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := resolveExecutablePath("unused", truncated); err != nil {
-		t.Fatalf("resolveExecutablePath(magic-only file) error = %v", err)
-	}
-}

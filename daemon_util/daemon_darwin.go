@@ -17,6 +17,12 @@ import (
 	"regexp"
 	"syscall"
 	"text/template"
+	"time"
+)
+
+const (
+	launchdStopPollInterval = 50 * time.Millisecond
+	launchdStopWaitMargin   = 5 * time.Second
 )
 
 // darwinRecord - standard record (struct) for darwin version of daemon package
@@ -139,6 +145,18 @@ func (darwin *darwinRecord) checkRunning() (string, bool) {
 	return "Service is stopped", false
 }
 
+func waitForLaunchdStop(timeout, pollInterval time.Duration, running func() bool) error {
+	deadline := time.Now().Add(timeout)
+	for running() {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return errors.New("timed out waiting for launchd service to stop")
+		}
+		time.Sleep(min(pollInterval, remaining))
+	}
+	return nil
+}
+
 // Install the service
 func (darwin *darwinRecord) Install(args ...string) (string, error) {
 	installAction := "Install " + darwin.description + ":"
@@ -253,6 +271,16 @@ func (darwin *darwinRecord) Stop() (string, error) {
 		return stopAction + failed, err
 	}
 	if err := exec.Command("launchctl", "bootout", target).Run(); err != nil {
+		return stopAction + failed, err
+	}
+	waitTimeout := darwin.stopTimeoutDuration()
+	if waitTimeout < time.Duration(1<<63-1)-launchdStopWaitMargin {
+		waitTimeout += launchdStopWaitMargin
+	}
+	if err := waitForLaunchdStop(waitTimeout, launchdStopPollInterval, func() bool {
+		_, running := darwin.checkRunning()
+		return running
+	}); err != nil {
 		return stopAction + failed, err
 	}
 

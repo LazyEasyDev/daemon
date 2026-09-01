@@ -30,7 +30,7 @@ func TestLinuxTemplatesConfigureStopTimeout(t *testing.T) {
 	}{
 		{name: "systemd", source: defaultSystemDConfig, want: "TimeoutStopSec=45s"},
 		{name: "OpenRC", source: defaultOpenRCConfig, want: `retry="TERM/45/KILL/5"`},
-		{name: "OpenWrt", source: defaultOpenWrtConfig, want: "procd_set_param term_timeout 45"},
+		{name: "OpenWrt", source: defaultOpenWrtConfig, want: "STOP_TIMEOUT=45"},
 		{name: "Upstart", source: defaultUpstartConfig, want: "kill timeout 45"},
 		{name: "System V", source: defaultSystemVConfig, want: "stop_timeout=45"},
 		{name: "Buildroot", source: defaultBuildrootConfig, want: "STOP_TIMEOUT=45"},
@@ -137,6 +137,20 @@ func TestOpenWrtRespawnsWithoutRetryLimit(t *testing.T) {
 	}
 	if strings.Contains(defaultOpenWrtConfig, "procd_set_param respawn 0 30 10000") {
 		t.Fatal("OpenWrt config still contains the old finite retry limit")
+	}
+}
+
+func TestOpenWrtWaitsForServiceStop(t *testing.T) {
+	for _, setting := range []string{
+		`procd_set_param term_timeout "$STOP_TIMEOUT"`,
+		`service_stopped() {`,
+		`while procd_running "$DAEMON"; do`,
+		`if [ "$elapsed" -ge $((STOP_TIMEOUT + 5)) ]; then`,
+		`return 1`,
+	} {
+		if !strings.Contains(defaultOpenWrtConfig, setting) {
+			t.Fatalf("OpenWrt config does not contain %q", setting)
+		}
 	}
 }
 

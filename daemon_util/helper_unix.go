@@ -38,18 +38,30 @@ func validateExecutable(path string) error {
 func validateNativeExecutable(path string) error {
 	magic, err := readExecutableMagic(path)
 	if runtime.GOOS == "darwin" {
-		if err == nil {
-			switch magic {
-			case [4]byte{0xfe, 0xed, 0xfa, 0xce},
-				[4]byte{0xce, 0xfa, 0xed, 0xfe},
-				[4]byte{0xfe, 0xed, 0xfa, 0xcf},
-				[4]byte{0xcf, 0xfa, 0xed, 0xfe},
-				[4]byte{0xca, 0xfe, 0xba, 0xbe},
-				[4]byte{0xbe, 0xba, 0xfe, 0xca},
-				[4]byte{0xca, 0xfe, 0xba, 0xbf},
-				[4]byte{0xbf, 0xba, 0xfe, 0xca}:
-				return nil
-			}
+		if err != nil {
+			return fmt.Errorf("%w: file is not a native Mach-O executable", ErrInvalidExecutablePath)
+		}
+
+		minimumSize := int64(0)
+		switch magic {
+		case [4]byte{0xfe, 0xed, 0xfa, 0xce},
+			[4]byte{0xce, 0xfa, 0xed, 0xfe},
+			[4]byte{0xca, 0xfe, 0xba, 0xbe},
+			[4]byte{0xbe, 0xba, 0xfe, 0xca}:
+			minimumSize = 28
+		case [4]byte{0xfe, 0xed, 0xfa, 0xcf},
+			[4]byte{0xcf, 0xfa, 0xed, 0xfe}:
+			minimumSize = 32
+		case [4]byte{0xca, 0xfe, 0xba, 0xbf},
+			[4]byte{0xbf, 0xba, 0xfe, 0xca}:
+			minimumSize = 40
+		default:
+			return fmt.Errorf("%w: file is not a native Mach-O executable", ErrInvalidExecutablePath)
+		}
+
+		info, err := os.Stat(path)
+		if err == nil && info.Size() >= minimumSize {
+			return nil
 		}
 		return fmt.Errorf("%w: file is not a native Mach-O executable", ErrInvalidExecutablePath)
 	}

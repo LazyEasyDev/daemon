@@ -11,15 +11,17 @@ func TestFormatStopProgress(t *testing.T) {
 	tests := []struct {
 		name    string
 		elapsed time.Duration
+		wait    time.Duration
 		want    string
 	}{
 		{name: "first tick", elapsed: time.Second, want: "Stopping worker... 1s elapsed"},
 		{name: "later tick", elapsed: 44*time.Second + 900*time.Millisecond, want: "Stopping worker... 44s elapsed"},
+		{name: "time limit", elapsed: 15 * time.Second, wait: 45 * time.Second, want: "Stopping worker... 15s elapsed (within time limit: 45s)"},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := formatStopProgress("worker", test.elapsed); got != test.want {
+			if got := formatStopProgress("worker", test.elapsed, test.wait); got != test.want {
 				t.Fatalf("formatStopProgress() = %q, want %q", got, test.want)
 			}
 		})
@@ -28,7 +30,7 @@ func TestFormatStopProgress(t *testing.T) {
 
 func TestStopProgressWaitsBeforeDisplaying(t *testing.T) {
 	var output bytes.Buffer
-	finish := beginStopProgress(&output, "worker", time.Hour)
+	finish := beginStopProgress(&output, "worker", 45*time.Second, time.Hour)
 	finish()
 	if output.Len() != 0 {
 		t.Fatalf("fast stop progress output = %q, want empty", output.String())
@@ -37,12 +39,12 @@ func TestStopProgressWaitsBeforeDisplaying(t *testing.T) {
 
 func TestStopProgressDisplaysAndClears(t *testing.T) {
 	var output bytes.Buffer
-	finish := beginStopProgress(&output, "worker", time.Millisecond)
+	finish := beginStopProgress(&output, "worker", 45*time.Second, time.Millisecond)
 	<-time.After(5 * time.Millisecond)
 	finish()
 
 	got := output.String()
-	if !strings.Contains(got, "\rStopping worker... 1s elapsed") {
+	if !strings.Contains(got, "\rStopping worker... 1s elapsed (within time limit: 45s)") {
 		t.Fatalf("stop progress output = %q, want countdown", got)
 	}
 	if !strings.HasSuffix(got, "\r") {

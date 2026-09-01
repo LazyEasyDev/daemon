@@ -132,8 +132,16 @@ When the timeout expires, supported service managers force termination. On
 Windows, the value also configures the SCM preshutdown allowance.
 
 When `stop`, `restart`, or `remove` waits longer than one second in an
-interactive terminal, daemon-util displays the elapsed stop time.
-The transient progress line is not written when output is redirected.
+interactive terminal, daemon-util displays the elapsed stop time and the
+configured timeout as an approximate wait, for example:
+
+```text
+Stopping myservice... 15s elapsed (within time limit: 45s)
+```
+
+The transient progress line is not written when output is redirected. If the
+optional metadata is missing, unreadable, or malformed, the command displays
+only the elapsed time.
 
 ### Application arguments
 
@@ -342,9 +350,10 @@ executable path, application arguments, working directory, restart behavior,
 and stop timeout supported by that backend.
 
 daemon-util also keeps a small metadata file containing the application path
-shown by `list`. Metadata is deliberately non-authoritative: deleting or
-damaging it does not affect an installed service, and native service-manager
-tools can continue to manage the service without daemon-util.
+shown by `list` and the stop timeout used for the terminal's approximate wait.
+Metadata writes are best-effort and deliberately non-authoritative: failure,
+deletion, or damage does not affect installation or service operation. Native
+service-manager tools can continue to manage the service without daemon-util.
 
 
 

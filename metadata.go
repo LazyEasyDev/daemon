@@ -7,12 +7,14 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 
 	"github.com/LazyEasyDev/daemon/daemon_util"
 )
 
 type serviceMetadata struct {
-	ApplicationPath string `json:"application_path"`
+	ApplicationPath    string `json:"application_path"`
+	StopTimeoutSeconds int64  `json:"stop_timeout_seconds,omitempty"`
 }
 
 func defaultServiceMetadataDirectory() (string, error) {
@@ -46,15 +48,15 @@ func serviceMetadataPath(directory, serviceName string) (string, error) {
 	return filepath.Join(directory, managedName+".json"), nil
 }
 
-func writeServiceMetadata(serviceName, applicationPath string) error {
+func writeServiceMetadata(serviceName, applicationPath string, stopTimeout time.Duration) error {
 	directory, err := defaultServiceMetadataDirectory()
 	if err != nil {
 		return err
 	}
-	return writeServiceMetadataTo(directory, serviceName, applicationPath)
+	return writeServiceMetadataTo(directory, serviceName, applicationPath, stopTimeout)
 }
 
-func writeServiceMetadataTo(directory, serviceName, applicationPath string) error {
+func writeServiceMetadataTo(directory, serviceName, applicationPath string, stopTimeout time.Duration) error {
 	path, err := serviceMetadataPath(directory, serviceName)
 	if err != nil {
 		return err
@@ -63,7 +65,10 @@ func writeServiceMetadataTo(directory, serviceName, applicationPath string) erro
 		return err
 	}
 
-	content, err := json.Marshal(serviceMetadata{ApplicationPath: applicationPath})
+	content, err := json.Marshal(serviceMetadata{
+		ApplicationPath:    applicationPath,
+		StopTimeoutSeconds: int64(stopTimeout / time.Second),
+	})
 	if err != nil {
 		return err
 	}
@@ -104,20 +109,40 @@ func readServiceMetadata(serviceName string) string {
 }
 
 func readServiceMetadataFrom(directory, serviceName string) string {
+	return readServiceMetadataRecordFrom(directory, serviceName).ApplicationPath
+}
+
+func readServiceStopTimeout(serviceName string) (time.Duration, bool) {
+	directory, err := defaultServiceMetadataDirectory()
+	if err != nil {
+		return 0, false
+	}
+	return readServiceStopTimeoutFrom(directory, serviceName)
+}
+
+func readServiceStopTimeoutFrom(directory, serviceName string) (time.Duration, bool) {
+	seconds := readServiceMetadataRecordFrom(directory, serviceName).StopTimeoutSeconds
+	if seconds <= 0 {
+		return 0, false
+	}
+	return time.Duration(seconds) * time.Second, true
+}
+
+func readServiceMetadataRecordFrom(directory, serviceName string) serviceMetadata {
 	path, err := serviceMetadataPath(directory, serviceName)
 	if err != nil {
-		return ""
+		return serviceMetadata{}
 	}
 	content, err := os.ReadFile(path)
 	if err != nil {
-		return ""
+		return serviceMetadata{}
 	}
 
 	var metadata serviceMetadata
 	if err := json.Unmarshal(content, &metadata); err != nil {
-		return ""
+		return serviceMetadata{}
 	}
-	return metadata.ApplicationPath
+	return metadata
 }
 
 func removeServiceMetadata(serviceName string) error {

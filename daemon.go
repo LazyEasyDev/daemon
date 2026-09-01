@@ -78,7 +78,9 @@ func install(_ context.Context, command *cli.Command) error {
 	if err != nil {
 		return err
 	}
-	_ = writeServiceMetadata(args[0], executablePath)
+	if err := writeServiceMetadata(args[0], executablePath, command.Duration("stop-timeout")); err != nil {
+		_ = removeServiceMetadata(args[0])
+	}
 	fmt.Println(result)
 
 	return nil
@@ -219,10 +221,11 @@ func beginServiceStopProgress(serviceName string) func() {
 	if !isTerminal(os.Stderr) {
 		return func() {}
 	}
-	return beginStopProgress(os.Stderr, serviceName, time.Second)
+	approximateWait, _ := readServiceStopTimeout(serviceName)
+	return beginStopProgress(os.Stderr, serviceName, approximateWait, time.Second)
 }
 
-func beginStopProgress(writer io.Writer, serviceName string, interval time.Duration) func() {
+func beginStopProgress(writer io.Writer, serviceName string, approximateWait, interval time.Duration) func() {
 	done := make(chan struct{})
 	stopped := make(chan struct{})
 	startedAt := time.Now()
@@ -235,7 +238,7 @@ func beginStopProgress(writer io.Writer, serviceName string, interval time.Durat
 		for {
 			select {
 			case now := <-ticker.C:
-				message := formatStopProgress(serviceName, now.Sub(startedAt))
+				message := formatStopProgress(serviceName, now.Sub(startedAt), approximateWait)
 				padding := max(lineWidth-len(message), 0)
 				_, _ = fmt.Fprint(writer, "\r", message, strings.Repeat(" ", padding))
 				lineWidth = len(message)
@@ -254,8 +257,11 @@ func beginStopProgress(writer io.Writer, serviceName string, interval time.Durat
 	}
 }
 
-func formatStopProgress(serviceName string, elapsed time.Duration) string {
+func formatStopProgress(serviceName string, elapsed, approximateWait time.Duration) string {
 	seconds := max(int64(elapsed/time.Second), 1)
+	if approximateWait > 0 {
+		return fmt.Sprintf("Stopping %s... %ds elapsed (within time limit: %s)", serviceName, seconds, approximateWait)
+	}
 	return fmt.Sprintf("Stopping %s... %ds elapsed", serviceName, seconds)
 }
 

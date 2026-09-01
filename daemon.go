@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/urfave/cli/v3"
 
@@ -124,7 +126,7 @@ func remove(_ context.Context, command *cli.Command) error {
 		return err
 	}
 
-	if err := stopIfRunning(service); err != nil {
+	if err := stopIfRunningWithProgress(serviceName, service); err != nil {
 		return err
 	}
 	result, err := service.Remove()
@@ -164,7 +166,7 @@ func stop(_ context.Context, command *cli.Command) error {
 	if err != nil {
 		return err
 	}
-	result, err := service.Stop()
+	result, err := stopWithProgress(serviceName, service)
 	if err != nil {
 		return err
 	}
@@ -182,7 +184,7 @@ func restart(_ context.Context, command *cli.Command) error {
 	if err != nil {
 		return err
 	}
-	if err := stopIfRunning(service); err != nil {
+	if err := stopIfRunningWithProgress(serviceName, service); err != nil {
 		return err
 	}
 	result, err := service.Start()
@@ -196,6 +198,65 @@ func restart(_ context.Context, command *cli.Command) error {
 
 type stoppable interface {
 	Stop() (string, error)
+}
+
+func stopWithProgress(serviceName string, service stoppable) (string, error) {
+	finishProgress := beginServiceStopProgress(serviceName)
+	result, err := service.Stop()
+	finishProgress()
+	return result, err
+}
+
+func stopIfRunningWithProgress(serviceName string, service stoppable) error {
+	_, err := stopWithProgress(serviceName, service)
+	if errors.Is(err, daemon_util.ErrAlreadyStopped) {
+		return nil
+	}
+	return err
+}
+
+func beginServiceStopProgress(serviceName string) func() {
+	if !isTerminal(os.Stderr) {
+		return func() {}
+	}
+	return beginStopProgress(os.Stderr, serviceName, time.Second)
+}
+
+func beginStopProgress(writer io.Writer, serviceName string, interval time.Duration) func() {
+	done := make(chan struct{})
+	stopped := make(chan struct{})
+	startedAt := time.Now()
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		defer close(stopped)
+
+		lineWidth := 0
+		for {
+			select {
+			case now := <-ticker.C:
+				message := formatStopProgress(serviceName, now.Sub(startedAt))
+				padding := max(lineWidth-len(message), 0)
+				_, _ = fmt.Fprint(writer, "\r", message, strings.Repeat(" ", padding))
+				lineWidth = len(message)
+			case <-done:
+				if lineWidth > 0 {
+					_, _ = fmt.Fprint(writer, "\r", strings.Repeat(" ", lineWidth), "\r")
+				}
+				return
+			}
+		}
+	}()
+
+	return func() {
+		close(done)
+		<-stopped
+	}
+}
+
+func formatStopProgress(serviceName string, elapsed time.Duration) string {
+	seconds := max(int64(elapsed/time.Second), 1)
+	return fmt.Sprintf("Stopping %s... %ds elapsed", serviceName, seconds)
 }
 
 func stopIfRunning(service stoppable) error {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -34,8 +35,16 @@ func TestServiceMetadataStoresResolvedApplicationPath(t *testing.T) {
 	}
 
 	metadataPath := filepath.Join(metadataDirectory, "lz_lz_worker.json")
-	if _, err := os.Stat(metadataPath); err != nil {
-		t.Fatalf("managed-name metadata file: %v", err)
+	content, err := os.ReadFile(metadataPath)
+	if err != nil {
+		t.Fatalf("read managed-name metadata file: %v", err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(content, &fields); err != nil {
+		t.Fatalf("decode metadata file: %v", err)
+	}
+	if len(fields) != 1 || fields["application_path"] != target {
+		t.Fatalf("metadata fields = %v, want only application_path", fields)
 	}
 }
 

@@ -5,8 +5,10 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
 
 	"github.com/urfave/cli/v3"
+	"golang.org/x/sys/windows"
 
 	"github.com/LazyEasyDev/daemon/daemon_util"
 )
@@ -50,4 +52,9 @@ func runWindowsService(_ context.Context, command *cli.Command) error {
 	}
 	_, err = daemon_util.RunWindowsCommandService(registrationName, args[0], args[1], args[2:]...)
 	return err
+}
+
+func isTerminal(file *os.File) bool {
+	var mode uint32
+	return windows.GetConsoleMode(windows.Handle(file.Fd()), &mode) == nil
 }

@@ -131,6 +131,10 @@ application argument.
 When the timeout expires, supported service managers force termination. On
 Windows, the value also configures the SCM preshutdown allowance.
 
+When `stop`, `restart`, or `remove` waits longer than one second in an
+interactive terminal, daemon-util displays the elapsed stop time.
+The transient progress line is not written when output is redirected.
+
 ### Application arguments
 
 Arguments are preserved, including spaces and shell characters:

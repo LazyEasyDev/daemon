@@ -194,17 +194,6 @@ func (linux *systemVRecord) Run(e Executable) (string, error) {
 	return runAction + " completed.", nil
 }
 
-// GetTemplate - gets service config template
-func (linux *systemVRecord) GetTemplate() string {
-	return linux.template
-}
-
-// SetTemplate - sets service config template
-func (linux *systemVRecord) SetTemplate(tplStr string) error {
-	linux.template = tplStr
-	return nil
-}
-
 func (linux *systemVRecord) serviceLinks() []string {
 	links := make([]string, 0, 7)
 	for _, runlevel := range [...]string{"2", "3", "4", "5"} {

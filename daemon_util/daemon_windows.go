@@ -514,13 +514,3 @@ func windowsServiceStatus(state svc.State) string {
 		return "unknown"
 	}
 }
-
-// GetTemplate - gets service config template
-func (linux *windowsRecord) GetTemplate() string {
-	return ""
-}
-
-// SetTemplate - sets service config template
-func (linux *windowsRecord) SetTemplate(tplStr string) error {
-	return errors.New("templating is not supported for windows")
-}

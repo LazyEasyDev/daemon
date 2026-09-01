@@ -189,17 +189,6 @@ func (linux *openWrtRecord) Run(e Executable) (string, error) {
 	return runAction + " completed.", nil
 }
 
-// GetTemplate - gets service config template
-func (linux *openWrtRecord) GetTemplate() string {
-	return linux.template
-}
-
-// SetTemplate - sets service config template
-func (linux *openWrtRecord) SetTemplate(tplStr string) error {
-	linux.template = tplStr
-	return nil
-}
-
 const defaultOpenWrtConfig = `#!/bin/sh /etc/rc.common
 #
 #       /etc/init.d/{{.Name}}

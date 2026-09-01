@@ -298,17 +298,6 @@ func (darwin *darwinRecord) Run(e Executable) (string, error) {
 	return runAction + " completed.", nil
 }
 
-// GetTemplate - gets service config template
-func (linux *darwinRecord) GetTemplate() string {
-	return linux.template
-}
-
-// SetTemplate - sets service config template
-func (linux *darwinRecord) SetTemplate(tplStr string) error {
-	linux.template = tplStr
-	return nil
-}
-
 const defaultPropertyList = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">

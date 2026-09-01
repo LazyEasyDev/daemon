@@ -158,15 +158,6 @@ func (linux *openRCRecord) Run(executable Executable) (string, error) {
 	return runAction + " completed.", nil
 }
 
-func (linux *openRCRecord) GetTemplate() string {
-	return linux.template
-}
-
-func (linux *openRCRecord) SetTemplate(template string) error {
-	linux.template = template
-	return nil
-}
-
 const defaultOpenRCConfig = `#!/sbin/openrc-run
 
 name={{shellQuote .Name}}

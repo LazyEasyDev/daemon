@@ -1,111 +1,77 @@
-# DAEMON
+# daemon-util
 
-Install applications as system services on Linux, macOS, FreeBSD, and Windows.
+Install an ordinary executable as a native service on Linux, macOS, FreeBSD,
+or Windows. Each application is registered as an independent service and is
+managed with the operating system's service manager.
 
-Run `./build.sh` to compile binaries into `build/`:
+## Quick start
 
-- `daemon-darwin-amd64`
-- `daemon-darwin-arm64`
-- `daemon-freebsd-amd64`
-- `daemon-freebsd-arm64`
-- `daemon-windows-amd64.exe`
-- `daemon-windows-386.exe`
-- `daemon-windows-arm64.exe`
-- `daemon-linux-amd64`
-- `daemon-linux-386`
-- `daemon-linux-arm64`
-- `daemon-linux-arm32`
-
-## Architecture
-
-`daemon-util` is a management CLI, not a shared long-running supervisor. It registers each application as an independent service with the platform's native service system, then exits. Lifecycle operations are delegated to systemd, OpenRC, OpenWrt procd, Upstart, System V or Buildroot init, FreeBSD rc.d, launchd, or Windows SCM. FreeBSD uses a separate `/usr/sbin/daemon` supervisor for each installed service. On Windows, ordinary applications use a separate `daemon-util` wrapper process for each service.
-
-We considered using one shared background process to supervise every installed application, but rejected that design for the following reasons:
-
-- The shared supervisor would be a single point of failure for every application it manages.
-- Applications might survive a supervisor crash. When the supervisor restarts, safely identifying and adopting those processes is difficult; starting replacements could create duplicate application instances.
-- Reimplementing process identity, restart policy, graceful shutdown, boot integration, dependencies, and permissions would duplicate behavior already owned by the operating system.
-- A permanently running, privileged control process would add operational and security surface that this CLI does not otherwise need.
-- Independent native services isolate failures and allow each application to be started, stopped, inspected, and recovered separately.
-
-This choice intentionally favors native reliability and failure isolation over identical behavior on every platform. Restart and shutdown details therefore follow the capabilities and constraints of each service manager.
-
-## Process containment
-
-The generated service configuration uses each platform's native containment where it is available:
-
-| Backend | Descendant handling on stop |
-| --- | --- |
-| Windows | The per-service wrapper signals the application's console process group, then terminates its Job Object if the stop timeout expires. |
-| systemd | `KillMode=control-group` stops processes remaining in the service cgroup. |
-| OpenRC | `supervise-daemon --stop-group` stops the supervised process group. |
-| System V | The application starts in a dedicated session and the script signals its process group. |
-| macOS launchd | launchd's default process-group cleanup applies. |
-| Buildroot, Upstart, OpenWrt, FreeBSD | The generated configuration adds no descendant guarantee beyond the service manager or supervisor's native behavior. |
-
-Process-group containment on OpenRC, System V, and launchd cannot stop descendants that deliberately detach into another session or process group. Applications must remain in the foreground and must not daemonize or otherwise escape native supervision. On newer OpenWrt systems, procd may provide additional cgroup containment, but the generated stop path does not depend on it.
-
-
-## How to use
-
-1. Compile program according to the os-arch system. 
-2. Copy the compiled file into your project package and rename it to `daemon` (`daemon.exe` on Windows).
-3. Install the service using the privileges required by your platform:
-	- macOS: run without `sudo`. The current implementation installs a per-user LaunchAgent.
-	- Linux and FreeBSD: run with `sudo` because the service is installed system-wide.
-	- Windows: use PowerShell or Command Prompt opened with **Run as administrator**. Windows Server does not require a `sudo` command.
-4. Manage it with `start`, `stop`, `restart`, `status`, or `remove` using the same privilege mode.
-
-### For example
-
-```
-├─{your-project-folder}
-│  ├─configs    //config folder
-│  ├─logs       //log folder
-│  ├─assets     //assets folder
-│  ├─myapp      //executable file
-│  └─daemon    //daemon file compiled and copy from this package
-```
-
-The service name is explicit and independent from the executable filename. It must start with an ASCII letter, contain only ASCII letters and digits, and be at most 241 characters long. A relative executable name is resolved beside the daemon binary. An executable in another folder can be installed using its absolute path.
-
-The application path must resolve to a native executable for the current operating system. Symbolic links are resolved during installation; dangling links, link loops, and missing path components cause installation to fail. The resolved absolute path is registered with the service manager, so changing the original link does not change the installed service. On Linux and FreeBSD, run a script by installing its native interpreter as the application and passing the script path as the first argument, for example `sudo ./daemon install myservice /bin/sh /opt/myservice.sh`. On macOS, use the same command without `sudo`. The executable or interpreter must remain in the foreground for the service lifetime.
-
-Every backend starts the application with the resolved executable's containing directory as its initial working directory. Relative application arguments are therefore resolved from that directory unless the application changes its own working directory before using them.
-
-On OpenWrt, the generated procd configuration uses a short shell launcher to change to that directory before starting the application. The executable and each application argument are passed as separate positional values, so spaces and shell characters remain literal and require no special handling. The launcher then uses `exec` to replace itself with the application; the PID, signals, exit status, respawn behavior, and procd supervision therefore remain attached directly to the application.
-
-On Windows, applications are hosted by the `daemon-util` wrapper and do not need to implement the Windows SCM protocol. The wrapper treats the target as a console application. To perform graceful cleanup, the application must handle `CTRL_BREAK_EVENT`; Go applications receive it as `os.Interrupt` through `os/signal`. GUI applications and descendants that create a separate console or process group are not supported.
-
-
-### Linux and FreeBSD
+### 1. Build daemon-util
 
 ```sh
-cd ./{your-project-folder}
-
-sudo ./daemon install myservice myapp [arg1] [arg2] ...
-sudo ./daemon install --stop-timeout 45s myservice myapp [arg1] [arg2] ...
-sudo ./daemon install myservice myapp --port 8080 --config "configs/my app.toml"
-sudo ./daemon install myservice "/opt/My App/myapp" --port 8080 --config "/opt/My App/config.toml"
-sudo ./daemon list
-sudo ./daemon ls
-sudo ./daemon start myservice
-sudo ./daemon status myservice
-sudo ./daemon restart myservice
-sudo ./daemon stop myservice
-sudo ./daemon remove myservice
+./build.sh
 ```
 
-### macOS
+Choose the binary in `build/` that matches the target system:
 
-Do not use `sudo`; it would create the per-user LaunchAgent for the root user instead of the logged-in user.
+| System | Architectures | Binary pattern |
+| --- | --- | --- |
+| Linux | AMD64, 386, ARM64, ARM32 | `daemon-linux-*` |
+| macOS | Intel, Apple Silicon | `daemon-darwin-*` |
+| FreeBSD | AMD64, ARM64 | `daemon-freebsd-*` |
+| Windows | AMD64, 386, ARM64 | `daemon-windows-*.exe` |
+
+You can rename the selected binary to `daemon` or `daemon.exe`.
+
+### 2. Put the files in a trusted location
+
+A simple layout is:
+
+```text
+/opt/myservice/
+├── daemon
+├── myapp
+└── config.toml
+```
+
+Linux and FreeBSD services run as `root`; Windows services run as
+`LocalSystem`. Keep the daemon binary, application, scripts, and their parent
+directories writable only by trusted administrators. Otherwise, another user
+could replace code that the service manager executes with elevated privileges.
+
+### 3. Install the service
+
+Linux or FreeBSD:
 
 ```sh
-cd ./{your-project-folder}
+cd /opt/myservice
+sudo ./daemon install myservice myapp --config config.toml
+```
 
-./daemon install myservice myapp [arg1] [arg2] ...
-./daemon install --stop-timeout 45s myservice myapp [arg1] [arg2] ...
-./daemon list
+macOS installs a service for the current user. Do not use `sudo`:
+
+```sh
+cd /Applications/MyService
+./daemon install myservice myapp --config config.toml
+```
+
+Windows requires PowerShell or Command Prompt opened with **Run as
+administrator**:
+
+```powershell
+cd C:\ProgramData\MyService
+.\daemon.exe install myservice .\myapp.exe --config config.toml
+```
+
+`myservice` is the service name. Everything after the application path is
+passed unchanged to the application.
+
+### 4. Manage the service
+
+Use `sudo` for these commands on Linux and FreeBSD. Do not use `sudo` on
+macOS. Continue using an administrator terminal on Windows.
+
+```sh
 ./daemon start myservice
 ./daemon status myservice
 ./daemon restart myservice
@@ -113,55 +79,268 @@ cd ./{your-project-folder}
 ./daemon remove myservice
 ```
 
-### Windows PowerShell
+List every service installed by this tool:
 
-Open PowerShell with **Run as administrator**, then run:
-
-```powershell
-cd C:\path\to\your-project-folder
-
-.\daemon.exe install myservice .\myapp.exe [arg1] [arg2] ...
-.\daemon.exe install --stop-timeout 5m myservice .\myapp.exe [arg1] [arg2] ...
-.\daemon.exe list
-.\daemon.exe start myservice
-.\daemon.exe status myservice
-.\daemon.exe restart myservice
-.\daemon.exe stop myservice
-.\daemon.exe remove myservice
+```sh
+./daemon list
+# Short form:
+./daemon ls
 ```
 
-On Windows, SCM runs `daemon.exe`, which starts the application and reports application startup or runtime failures to SCM. Nonzero application exits activate the configured SCM recovery actions. Stopping the service sends `CTRL_BREAK_EVENT` to the application's console process group and waits for it to exit. If delivery fails or the installed stop timeout expires, the wrapper terminates the application's Job Object, including its descendants.
-
-Windows services use the LocalSystem account by default. Keep `daemon.exe`, the target executable, scripts, and their containing directories writable only by trusted administrators; otherwise an unprivileged user could replace code that SCM executes as LocalSystem.
-
-`--stop-timeout` defaults to `600s` and accepts positive, whole-second Go duration values such as `45s` or `10m`. Set it during `install`; on Unix platforms, the generated service configuration waits up to that duration before forcing termination. On Windows, the value is stored in SCM, controls how long the wrapper waits after `CTRL_BREAK_EVENT`, and configures the preshutdown allowance during an operating-system shutdown or reboot. Stop, restart, and remove operations read the installed value from SCM while waiting for the service to report `STOPPED`. The option must appear before the executable because arguments after the executable belong to the application.
-
-`list` and `ls` show each managed service, its current status, and the configured application path:
+Example output:
 
 ```text
-NAME        STATUS   APP
-api         stopped  /opt/api
-myservice   running  /opt/myservice/current
+NAME       STATUS   APP
+api        stopped  /opt/api/api
+myservice  running  /opt/myservice/myapp
 ```
 
-The application path is informational and records the same resolved absolute path registered with the service manager. Metadata is stored in the platform application-data directory and does not control service operations. If metadata cannot be written or read, or is malformed, installation and listing still succeed and the `APP` column is blank for that service. Removing a service also removes its metadata on a best-effort basis.
+## Command reference
 
+| Command | Purpose |
+| --- | --- |
+| `install <name> <application> [arguments...]` | Register an application as a service |
+| `list` or `ls` | List services installed by daemon-util |
+| `start <name>` | Start a service |
+| `stop <name>` | Stop a service |
+| `restart <name>` | Stop and start a service |
+| `status <name>` | Show a service's current state |
+| `remove <name>` or `delete <name>` | Stop and unregister a service |
 
-### Test applications
+Service names must:
 
-Run `./test_app/build.sh` to compile test applications into `test_app/build/`.
+- start with an ASCII letter;
+- contain only ASCII letters and digits;
+- be no longer than 241 characters.
 
-#### Linux ARM64 example
+## Install options
+
+### Stop timeout
+
+Set the maximum graceful shutdown time during installation:
 
 ```sh
-sudo ./daemon install apptest test_app/build/test-app-linux-arm64
+./daemon install --stop-timeout 45s myservice myapp
 ```
 
-#### Linux ARM32 example (ARMv6, ARMv7, and compatible systems)
+The default is `600s`. The value must be a positive, whole-second Go duration,
+such as `45s`, `5m`, or `1h30m`. Place the option before the service name and
+application because everything after the application is treated as an
+application argument.
+
+When the timeout expires, supported service managers force termination. On
+Windows, the value also configures the SCM preshutdown allowance.
+
+### Application arguments
+
+Arguments are preserved, including spaces and shell characters:
 
 ```sh
-sudo ./daemon install apptest test_app/build/test-app-linux-arm32
+./daemon install myservice myapp \
+  --port 8080 \
+  --config "configs/production config.toml"
 ```
+
+The application must remain in the foreground for its entire lifetime. It
+must not fork into the background or daemonize itself.
+
+## Executable paths
+
+A relative application path is resolved beside the daemon-util binary, not
+from the shell's current directory. Use an absolute path when the application
+is stored elsewhere:
+
+```sh
+sudo ./daemon install myservice "/opt/My Service/myapp"
+```
+
+During installation, daemon-util:
+
+1. converts the application path to an absolute path;
+2. resolves symbolic links;
+3. verifies that the target is a native executable;
+4. registers the resolved path with the service manager.
+
+Changing the original symbolic link later does not change the installed
+service. Reinstall the service to use a different executable path.
+
+The application's initial working directory is the directory containing its
+resolved executable. Relative application arguments, such as configuration
+paths, are resolved from there unless the application changes directories.
+
+### Running scripts
+
+Install the native interpreter and pass the script as its first argument:
+
+```sh
+sudo ./daemon install myservice /bin/sh /opt/myservice/service.sh
+```
+
+On macOS, use the same command without `sudo`.
+
+## Platform behavior
+
+| Platform | Service manager | Installation scope |
+| --- | --- | --- |
+| Linux | systemd, OpenRC, OpenWrt procd, Upstart, System V, or Buildroot init | System-wide |
+| macOS | launchd | Current user |
+| FreeBSD | rc.d with `/usr/sbin/daemon` | System-wide |
+| Windows | Service Control Manager | System-wide, LocalSystem |
+
+Restart policy and shutdown behavior follow the selected native service
+manager, so small behavioral differences between platforms are expected.
+
+### Process cleanup
+
+| Backend | Descendant handling when stopped |
+| --- | --- |
+| Windows | Sends `CTRL_BREAK_EVENT`, then terminates the Job Object after the timeout |
+| systemd | Stops processes remaining in the service control group |
+| OpenRC | Stops the supervised process group |
+| System V | Starts a dedicated session and signals its process group |
+| macOS launchd | Uses launchd's default process-group cleanup |
+| Buildroot, Upstart, OpenWrt, FreeBSD | Relies on native service-manager or supervisor behavior |
+
+Applications must not deliberately escape supervision by creating a separate
+session, process group, or console.
+
+### Windows applications
+
+Applications do not need to implement the Windows SCM protocol. daemon-util
+runs a separate wrapper process for each service and hosts the application as
+a console program.
+
+For graceful shutdown, the application must handle `CTRL_BREAK_EVENT`. Go
+applications receive it as `os.Interrupt` through `os/signal`. GUI applications
+and descendants that create a separate console or process group are not
+supported. A nonzero application exit activates the configured SCM recovery
+actions.
+
+### Service list metadata
+
+The `APP` column is informational. daemon-util stores the resolved application
+path in the platform's application-data directory, but this metadata does not
+control the service. Installation and listing still work if metadata cannot be
+written or read; the `APP` value will be blank. Removal deletes metadata on a
+best-effort basis.
+
+## Testing
+
+Run the unit tests:
+
+```sh
+go test ./...
+```
+
+Build the configurable HTTP test application:
+
+```sh
+./test_app/build.sh
+```
+
+The binaries are written to `test_app/build/`. For example:
+
+```sh
+sudo ./daemon install apptest /absolute/path/to/test_app/build/test-app-linux-amd64 \
+  --port 18080
+sudo ./daemon start apptest
+curl http://127.0.0.1:18080/healthz
+```
+
+See [test_app/README.md](test_app/README.md) for argument, restart, and graceful
+shutdown test scenarios.
+
+## Architecture
+
+### Runtime model
+
+daemon-util is a management CLI, not a permanently running shared supervisor.
+An install operation follows this flow:
+
+```text
+User command
+  │
+  ▼
+daemon-util
+  ├── validates the service name and executable
+  ├── resolves the executable to an absolute path
+  ├── selects the platform backend
+  ├── writes or registers the native service definition
+  └── stores informational list metadata
+       │
+       ▼
+  Native service manager
+       │
+       ▼
+    Application process
+```
+
+After registration, daemon-util exits. The native service manager owns boot
+startup, process monitoring, restart policy, status, and shutdown. Later
+`start`, `stop`, `restart`, `status`, and `remove` commands communicate with
+that service manager instead of controlling a long-running daemon-util
+process.
+
+Windows is the only platform that needs an additional runtime component. Each
+installed service starts its own daemon-util wrapper because ordinary console
+applications do not implement the Windows SCM protocol. The wrapper belongs
+to that service only; it is not shared with other installed applications.
+
+### Backend selection
+
+Platform-specific Go files are selected at build time. Linux then detects the
+available init system at runtime in this order:
+
+1. systemd;
+2. OpenRC;
+3. Upstart;
+4. OpenWrt procd;
+5. Buildroot-style init;
+6. System V as the fallback when `/etc/init.d` exists.
+
+Installation creates the native definition expected by the selected backend:
+
+| Backend | Registered definition |
+| --- | --- |
+| systemd | `/etc/systemd/system/<name>.service` |
+| OpenRC, OpenWrt, System V | `/etc/init.d/<name>` |
+| Upstart | `/etc/init/<name>.conf` |
+| Buildroot | `/etc/init.d/S90<name>` |
+| FreeBSD rc.d | `/usr/local/etc/rc.d/<name>` |
+| macOS launchd | `~/Library/LaunchAgents/<name>.plist` |
+| Windows SCM | Service Control Manager database entry |
+
+Internally, daemon-util prefixes registration names so `list` can distinguish
+services created by this tool from unrelated system services. Commands and
+output continue to use the original user-facing name.
+
+### Service isolation
+
+Each installed application has its own native service definition and process
+supervision. One failing application therefore does not take daemon-util or
+other managed applications down with it.
+
+A single shared supervisor was intentionally avoided because it would:
+
+- create one failure point for every managed application;
+- require safely adopting surviving processes after a supervisor restart;
+- duplicate native restart, shutdown, boot, dependency, and permission logic;
+- keep an additional privileged control process running permanently.
+
+This design favors native reliability and failure isolation over identical
+behavior on every platform. Exact restart and shutdown semantics follow the
+capabilities of the selected service manager.
+
+### Configuration and metadata
+
+The native service definition is authoritative. It contains the resolved
+executable path, application arguments, working directory, restart behavior,
+and stop timeout supported by that backend.
+
+daemon-util also keeps a small metadata file containing the application path
+shown by `list`. Metadata is deliberately non-authoritative: deleting or
+damaging it does not affect an installed service, and native service-manager
+tools can continue to manage the service without daemon-util.
 
 
 

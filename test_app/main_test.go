@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -17,6 +19,7 @@ func TestParseConfig(t *testing.T) {
 		"--message", "hello service",
 		"--count", "7",
 		"--port", "18081",
+		"--file-path", "relative-path-test.txt",
 		"--stop-after", "30s",
 		"--stop_delay", "45s",
 	}
@@ -24,8 +27,33 @@ func TestParseConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.Enabled || cfg.Message != "hello service" || cfg.Count != 7 || cfg.Port != 18081 || cfg.StopAfter != 30*time.Second || cfg.StopDelay != 45*time.Second {
+	if !cfg.Enabled || cfg.Message != "hello service" || cfg.Count != 7 || cfg.Port != 18081 || cfg.FilePath != "relative-path-test.txt" || cfg.StopAfter != 30*time.Second || cfg.StopDelay != 45*time.Second {
 		t.Fatalf("parsed config = %+v", cfg)
+	}
+}
+
+func TestReadConfiguredFileRelativeToWorkingDirectory(t *testing.T) {
+	directory := t.TempDir()
+	const filename = "relative-path-test.txt"
+	const want = "relative path works\n"
+	if err := os.WriteFile(filepath.Join(directory, filename), []byte(want), 0644); err != nil {
+		t.Fatal(err)
+	}
+	previousDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(directory); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previousDirectory) })
+
+	got, err := readConfiguredFile(filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("file content = %q, want %q", got, want)
 	}
 }
 
@@ -38,7 +66,7 @@ func TestParseConfigRejectsNegativeStopDelay(t *testing.T) {
 func TestStatusHandlerReturnsConfigAndArgs(t *testing.T) {
 	args := []string{"--enabled=true", "--message", "hello service", "--count", "7"}
 	cfg := config{Enabled: true, Message: "hello service", Count: 7, Port: 18080}
-	app := newApplication(cfg, args, "/opt/test-app")
+	app := newApplication(cfg, args, "/opt/test-app", "relative path works\n")
 	request := httptest.NewRequest("GET", "/", nil)
 	recorder := httptest.NewRecorder()
 
@@ -56,6 +84,9 @@ func TestStatusHandlerReturnsConfigAndArgs(t *testing.T) {
 	}
 	if !slices.Equal(response.Args, args) {
 		t.Fatalf("response args = %q, want %q", response.Args, args)
+	}
+	if response.FileContent != "relative path works\n" {
+		t.Fatalf("file content = %q, want fixture content", response.FileContent)
 	}
 	if response.CurrentTime.IsZero() || response.StartedAt.IsZero() {
 		t.Fatal("response timestamps must be populated")
@@ -76,7 +107,7 @@ func TestApplicationStartCanRetryAfterPortConflict(t *testing.T) {
 	defer listener.Close()
 
 	port := listener.Addr().(*net.TCPAddr).Port
-	app := newApplication(config{Port: port}, nil, "/opt/test-app")
+	app := newApplication(config{Port: port}, nil, "/opt/test-app", "")
 	if err := app.start(); err == nil {
 		t.Fatalf("start() accepted occupied address %s", fmt.Sprintf("127.0.0.1:%d", port))
 	}
@@ -90,7 +121,7 @@ func TestApplicationStartCanRetryAfterPortConflict(t *testing.T) {
 }
 
 func TestApplicationStopsAfterConfiguredDuration(t *testing.T) {
-	app := newApplication(config{Port: 0, StopAfter: 10 * time.Millisecond}, nil, "/opt/test-app")
+	app := newApplication(config{Port: 0, StopAfter: 10 * time.Millisecond}, nil, "/opt/test-app", "")
 	if err := app.run(); !errors.Is(err, errStopAfter) {
 		t.Fatalf("run() error = %v, want %v", err, errStopAfter)
 	}
@@ -98,7 +129,7 @@ func TestApplicationStopsAfterConfiguredDuration(t *testing.T) {
 
 func TestApplicationDelaysGracefulStop(t *testing.T) {
 	const stopDelay = 50 * time.Millisecond
-	app := newApplication(config{Port: 0, StopDelay: stopDelay}, nil, "/opt/test-app")
+	app := newApplication(config{Port: 0, StopDelay: stopDelay}, nil, "/opt/test-app", "")
 	if err := app.start(); err != nil {
 		t.Fatal(err)
 	}

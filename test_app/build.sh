@@ -8,6 +8,7 @@ build_dir="$script_dir/build"
 
 rm -rf "$build_dir"
 mkdir -p "$build_dir"
+printf '%s\n' 'daemon-util relative path test passed' > "$build_dir/relative-path-test.txt"
 
 build_target() {
 	target_os=$1

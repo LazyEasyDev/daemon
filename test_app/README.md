@@ -10,10 +10,51 @@ This configurable HTTP server verifies that `daemon` preserves application argum
 | `--message` | String | `hello from test app` |
 | `--count` | Integer | `1` |
 | `--port` | Integer | `18080` |
+| `--file-path` | String | Empty (disabled) |
 | `--stop-after` | Duration | `0` (disabled) |
 | `--stop_delay` | Duration | `0` (disabled) |
 
 Use `--enabled=true` or `--enabled=false` for the Boolean option. Quote string values that contain spaces. Durations use Go syntax, such as `30s`, `2m`, or `1m30s`.
+
+When `--file-path` is set, the application reads the file during startup and
+returns its contents as `file_content` from the root endpoint. A missing or
+unreadable file causes startup to fail.
+
+## Verify a relative file path
+
+`./test_app/build.sh` creates `relative-path-test.txt` beside the generated
+test-app binaries. Install a test app with that relative filename:
+
+```sh
+daemon_bin="$PWD/build/daemon-darwin-arm64"
+app_bin="$PWD/test_app/build/test-app-darwin-arm64"
+
+"$daemon_bin" install testapp "$app_bin" \
+  --port 18080 \
+  --file-path relative-path-test.txt
+"$daemon_bin" start testapp
+curl http://127.0.0.1:18080/
+```
+
+The response should contain:
+
+```json
+{
+  "config": {
+    "file_path": "relative-path-test.txt"
+  },
+  "file_content": "daemon-util relative path test passed\n"
+}
+```
+
+This confirms that daemon-util starts the application from the executable's
+directory, allowing relative application paths to resolve beside the binary.
+Stop and remove the service after testing:
+
+```sh
+"$daemon_bin" stop testapp
+"$daemon_bin" remove testapp
+```
 
 ## Verify automatic restart
 
@@ -57,7 +98,9 @@ curl http://127.0.0.1:18080/
 curl http://127.0.0.1:18080/healthz
 ```
 
-The root endpoint returns the parsed configuration, original argument list, executable path, process ID, start time, and current time as JSON.
+The root endpoint returns the parsed configuration, original argument list,
+executable path, loaded file content, process ID, start time, and current time
+as JSON.
 
 ## Build all platforms
 

@@ -23,6 +23,7 @@ type config struct {
 	Message   string        `json:"message"`
 	Count     int           `json:"count"`
 	Port      int           `json:"port"`
+	FilePath  string        `json:"file_path"`
 	StopAfter time.Duration `json:"stop_after"`
 	StopDelay time.Duration `json:"stop_delay"`
 }
@@ -33,21 +34,23 @@ type status struct {
 	Config      config    `json:"config"`
 	Args        []string  `json:"args"`
 	Executable  string    `json:"executable"`
+	FileContent string    `json:"file_content"`
 	PID         int       `json:"pid"`
 	StartedAt   time.Time `json:"started_at"`
 	CurrentTime time.Time `json:"current_time"`
 }
 
 type application struct {
-	config     config
-	args       []string
-	executable string
-	startedAt  time.Time
-	server     *http.Server
-	serveErr   chan error
-	startMu    sync.Mutex
-	started    bool
-	stopOnce   sync.Once
+	config      config
+	args        []string
+	executable  string
+	fileContent string
+	startedAt   time.Time
+	server      *http.Server
+	serveErr    chan error
+	startMu     sync.Mutex
+	started     bool
+	stopOnce    sync.Once
 }
 
 func parseConfig(args []string) (config, error) {
@@ -58,6 +61,7 @@ func parseConfig(args []string) (config, error) {
 	flags.StringVar(&cfg.Message, "message", "hello from test app", "message returned by the server")
 	flags.IntVar(&cfg.Count, "count", 1, "sample integer value")
 	flags.IntVar(&cfg.Port, "port", 18080, "HTTP listen port")
+	flags.StringVar(&cfg.FilePath, "file-path", "", "file to read during startup")
 	flags.DurationVar(&cfg.StopAfter, "stop-after", 0, "stop with a failure after this duration")
 	flags.DurationVar(&cfg.StopDelay, "stop_delay", 0, "delay graceful shutdown after a stop request")
 	if err := flags.Parse(args); err != nil {
@@ -78,13 +82,25 @@ func parseConfig(args []string) (config, error) {
 	return cfg, nil
 }
 
-func newApplication(cfg config, args []string, executable string) *application {
+func readConfiguredFile(path string) (string, error) {
+	if path == "" {
+		return "", nil
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read configured file %q: %w", path, err)
+	}
+	return string(content), nil
+}
+
+func newApplication(cfg config, args []string, executable, fileContent string) *application {
 	app := &application{
-		config:     cfg,
-		args:       append([]string(nil), args...),
-		executable: executable,
-		startedAt:  time.Now(),
-		serveErr:   make(chan error, 1),
+		config:      cfg,
+		args:        append([]string(nil), args...),
+		executable:  executable,
+		fileContent: fileContent,
+		startedAt:   time.Now(),
+		serveErr:    make(chan error, 1),
 	}
 
 	mux := http.NewServeMux()
@@ -106,6 +122,7 @@ func (app *application) handleStatus(writer http.ResponseWriter, _ *http.Request
 		Config:      app.config,
 		Args:        app.args,
 		Executable:  app.executable,
+		FileContent: app.fileContent,
 		PID:         os.Getpid(),
 		StartedAt:   app.startedAt,
 		CurrentTime: time.Now(),
@@ -201,8 +218,12 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	fileContent, err := readConfiguredFile(cfg.FilePath)
+	if err != nil {
+		log.Fatal(err)
+	}
 
-	if err := newApplication(cfg, args, executable).run(); err != nil {
+	if err := newApplication(cfg, args, executable, fileContent).run(); err != nil {
 		log.Fatal(err)
 	}
 }

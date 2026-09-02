@@ -180,6 +180,12 @@ The application's initial working directory is the directory containing its
 resolved executable. Relative application arguments, such as configuration
 paths, are resolved from there unless the application changes directories.
 
+On Linux systems using systemd, executable paths containing dollar signs,
+single quotes, double quotes, backslashes, control characters, or a parent
+directory ending with a space are rejected during installation. Move the
+executable to a conventional path before installing it. This restriction does
+not apply to application arguments.
+
 ### Running scripts
 
 Install the native interpreter and pass the script as its first argument:

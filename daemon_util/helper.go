@@ -193,6 +193,22 @@ func systemdConfigQuote(value string) string {
 	return strings.ReplaceAll(strconv.Quote(value), "%", "%%")
 }
 
+func systemdPathValue(value string) string {
+	return strings.ReplaceAll(value, "%", "%%")
+}
+
+func validateSystemDExecutablePath(path string) error {
+	for _, character := range path {
+		if character < ' ' || character == 0x7f || strings.ContainsRune(`$'"\`, character) {
+			return fmt.Errorf("%w: character %q is not supported by systemd executable paths", ErrInvalidExecutablePath, character)
+		}
+	}
+	if strings.HasSuffix(filepath.Dir(path), " ") {
+		return fmt.Errorf("%w: systemd working directory must not end with a space", ErrInvalidExecutablePath)
+	}
+	return nil
+}
+
 func statusCommandError(manager, name string, output []byte, err error) error {
 	detail := strings.TrimSpace(string(output))
 	if err != nil && detail != "" {

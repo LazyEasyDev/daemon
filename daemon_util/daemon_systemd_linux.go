@@ -78,10 +78,14 @@ func (linux *systemDRecord) Install(args ...string) (string, error) {
 	if err != nil {
 		return installAction + failed, err
 	}
+	if err := validateSystemDExecutablePath(execPatch); err != nil {
+		return installAction + failed, err
+	}
 
 	funcs := template.FuncMap{
 		"systemdQuote":       systemdQuote,
 		"systemdConfigQuote": systemdConfigQuote,
+		"systemdPathValue":   systemdPathValue,
 	}
 	if err := writeTemplateFile(
 		srvPath,
@@ -215,7 +219,7 @@ Description={{systemdConfigQuote .Description}}
 [Service]
 Type=exec
 ExecStart={{systemdQuote .Path}} {{.Args}}
-WorkingDirectory={{systemdConfigQuote .WorkingDirectory}}
+WorkingDirectory={{systemdPathValue .WorkingDirectory}}
 Restart=on-failure
 RestartSec=20s
 TimeoutStopSec={{.StopTimeoutSeconds}}s

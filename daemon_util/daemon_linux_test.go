@@ -4,6 +4,7 @@ package daemon_util
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,6 +22,7 @@ func TestLinuxTemplatesConfigureStopTimeout(t *testing.T) {
 		"shellQuote":         shellQuote,
 		"systemdQuote":       systemdQuote,
 		"systemdConfigQuote": systemdConfigQuote,
+		"systemdPathValue":   systemdPathValue,
 		"upstartQuote":       upstartQuote,
 	}
 	tests := []struct {
@@ -54,41 +56,45 @@ func TestLinuxTemplatesConfigureStopTimeout(t *testing.T) {
 }
 
 func TestLinuxTemplatesConfigureWorkingDirectory(t *testing.T) {
-	workingDirectory := "/opt/worker's files"
-	data := struct {
-		Name, Description, Path, Args, WorkingDirectory string
-		StopTimeoutSeconds                              int64
-	}{"worker", "worker", workingDirectory + "/worker", shellQuoteArgs([]string{"argument with spaces"}), workingDirectory, 45}
 	funcs := template.FuncMap{
 		"shellQuote":         shellQuote,
 		"systemdQuote":       systemdQuote,
 		"systemdConfigQuote": systemdConfigQuote,
+		"systemdPathValue":   systemdPathValue,
 		"upstartQuote":       upstartQuote,
 	}
 	tests := []struct {
-		name   string
-		source string
-		wants  []string
+		name             string
+		source           string
+		workingDirectory string
+		wants            []string
 	}{
-		{name: "systemd", source: defaultSystemDConfig, wants: []string{"WorkingDirectory=" + systemdConfigQuote(workingDirectory)}},
-		{name: "OpenRC", source: defaultOpenRCConfig, wants: []string{"directory=" + shellQuote(workingDirectory)}},
-		{name: "OpenWrt", source: defaultOpenWrtConfig, wants: []string{
-			"WORKING_DIRECTORY=" + shellQuote(workingDirectory),
+		{name: "systemd", source: defaultSystemDConfig, workingDirectory: "/opt/worker % files", wants: []string{
+			"ExecStart=" + systemdQuote("/opt/worker % files/worker"),
+			"WorkingDirectory=/opt/worker %% files",
+		}},
+		{name: "OpenRC", source: defaultOpenRCConfig, workingDirectory: "/opt/worker's % files", wants: []string{"directory=" + shellQuote("/opt/worker's % files")}},
+		{name: "OpenWrt", source: defaultOpenWrtConfig, workingDirectory: "/opt/worker's % files", wants: []string{
+			"WORKING_DIRECTORY=" + shellQuote("/opt/worker's % files"),
 			`procd_set_param command /bin/sh -c 'cd "$1" && shift && exec "$@"' sh "$WORKING_DIRECTORY" "$PROG" 'argument with spaces'`,
 		}},
-		{name: "Upstart", source: defaultUpstartConfig, wants: []string{"chdir " + upstartQuote(workingDirectory)}},
-		{name: "System V", source: defaultSystemVConfig, wants: []string{
-			"working_directory=" + shellQuote(workingDirectory),
+		{name: "Upstart", source: defaultUpstartConfig, workingDirectory: "/opt/worker's % files", wants: []string{"chdir " + upstartQuote("/opt/worker's % files")}},
+		{name: "System V", source: defaultSystemVConfig, workingDirectory: "/opt/worker's % files", wants: []string{
+			"working_directory=" + shellQuote("/opt/worker's % files"),
 			`cd "$working_directory" || exit 5`,
 		}},
-		{name: "Buildroot", source: defaultBuildrootConfig, wants: []string{
-			"WORKING_DIRECTORY=" + shellQuote(workingDirectory),
+		{name: "Buildroot", source: defaultBuildrootConfig, workingDirectory: "/opt/worker's % files", wants: []string{
+			"WORKING_DIRECTORY=" + shellQuote("/opt/worker's % files"),
 			`if ! cd "$WORKING_DIRECTORY"; then`,
 		}},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			data := struct {
+				Name, Description, Path, Args, WorkingDirectory string
+				StopTimeoutSeconds                              int64
+			}{"worker", "worker", test.workingDirectory + "/worker", shellQuoteArgs([]string{"argument with spaces"}), test.workingDirectory, 45}
 			tpl, err := template.New(test.name).Funcs(funcs).Parse(test.source)
 			if err != nil {
 				t.Fatal(err)
@@ -103,6 +109,35 @@ func TestLinuxTemplatesConfigureWorkingDirectory(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSystemDPathValueEscapesSpecifiers(t *testing.T) {
+	got := systemdPathValue("/opt/worker % files")
+	want := "/opt/worker %% files"
+	if got != want {
+		t.Fatalf("systemdPathValue() = %q, want %q", got, want)
+	}
+}
+
+func TestValidateSystemDExecutablePath(t *testing.T) {
+	if err := validateSystemDExecutablePath("/opt/worker % files/worker"); err != nil {
+		t.Fatalf("safe path rejected: %v", err)
+	}
+
+	for _, path := range []string{
+		"/opt/worker$release/worker",
+		"/opt/worker's/worker",
+		`/opt/worker"quote/worker`,
+		`/opt/worker\config/worker`,
+		"/opt/worker\nExecStart=/bin/false",
+		"/opt/worker\tconfig/worker",
+		"/opt/worker\x7fconfig/worker",
+		"/opt/worker /worker",
+	} {
+		if err := validateSystemDExecutablePath(path); !errors.Is(err, ErrInvalidExecutablePath) {
+			t.Errorf("validateSystemDExecutablePath(%q) error = %v, want ErrInvalidExecutablePath", path, err)
+		}
 	}
 }
 

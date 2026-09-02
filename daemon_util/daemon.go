@@ -57,6 +57,7 @@ type ServiceStatus struct {
 	Name            string
 	Status          string
 	ApplicationPath string
+	Arguments       string
 }
 
 // ManagedServiceName returns the internal registration name for a user-facing

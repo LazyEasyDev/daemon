@@ -33,7 +33,12 @@ func newCommand() *cli.Command {
 			Name:    "list",
 			Aliases: []string{"ls"},
 			Usage:   "list services installed by this tool",
-			Action:  list,
+			Flags: []cli.Flag{&cli.BoolFlag{
+				Name:    "long",
+				Aliases: []string{"l"},
+				Usage:   "show application arguments",
+			}},
+			Action: list,
 		},
 		{
 			Name:    "remove",

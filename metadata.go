@@ -14,6 +14,7 @@ import (
 
 type serviceMetadata struct {
 	ApplicationPath    string `json:"application_path"`
+	Arguments          string `json:"arguments"`
 	StopTimeoutSeconds int64  `json:"stop_timeout_seconds,omitempty"`
 }
 
@@ -48,15 +49,15 @@ func serviceMetadataPath(directory, serviceName string) (string, error) {
 	return filepath.Join(directory, managedName+".json"), nil
 }
 
-func writeServiceMetadata(serviceName, applicationPath string, stopTimeout time.Duration) error {
+func writeServiceMetadata(serviceName, applicationPath, arguments string, stopTimeout time.Duration) error {
 	directory, err := defaultServiceMetadataDirectory()
 	if err != nil {
 		return err
 	}
-	return writeServiceMetadataTo(directory, serviceName, applicationPath, stopTimeout)
+	return writeServiceMetadataTo(directory, serviceName, applicationPath, arguments, stopTimeout)
 }
 
-func writeServiceMetadataTo(directory, serviceName, applicationPath string, stopTimeout time.Duration) error {
+func writeServiceMetadataTo(directory, serviceName, applicationPath, arguments string, stopTimeout time.Duration) error {
 	path, err := serviceMetadataPath(directory, serviceName)
 	if err != nil {
 		return err
@@ -67,6 +68,7 @@ func writeServiceMetadataTo(directory, serviceName, applicationPath string, stop
 
 	content, err := json.Marshal(serviceMetadata{
 		ApplicationPath:    applicationPath,
+		Arguments:          arguments,
 		StopTimeoutSeconds: int64(stopTimeout / time.Second),
 	})
 	if err != nil {
@@ -101,11 +103,15 @@ func writeServiceMetadataTo(directory, serviceName, applicationPath string, stop
 }
 
 func readServiceMetadata(serviceName string) string {
+	return readServiceMetadataRecord(serviceName).ApplicationPath
+}
+
+func readServiceMetadataRecord(serviceName string) serviceMetadata {
 	directory, err := defaultServiceMetadataDirectory()
 	if err != nil {
-		return ""
+		return serviceMetadata{}
 	}
-	return readServiceMetadataFrom(directory, serviceName)
+	return readServiceMetadataRecordFrom(directory, serviceName)
 }
 
 func readServiceMetadataFrom(directory, serviceName string) string {

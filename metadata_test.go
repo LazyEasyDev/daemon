@@ -28,7 +28,7 @@ func TestServiceMetadataStoresResolvedApplicationPath(t *testing.T) {
 	}
 
 	metadataDirectory := filepath.Join(directory, "metadata")
-	if err := writeServiceMetadataTo(metadataDirectory, "worker", resolved, 45*time.Second); err != nil {
+	if err := writeServiceMetadataTo(metadataDirectory, "worker", resolved, "--message hello world", 45*time.Second); err != nil {
 		t.Fatal(err)
 	}
 	if got := readServiceMetadataFrom(metadataDirectory, "worker"); got != target {
@@ -44,8 +44,11 @@ func TestServiceMetadataStoresResolvedApplicationPath(t *testing.T) {
 	if err := json.Unmarshal(content, &fields); err != nil {
 		t.Fatalf("decode metadata file: %v", err)
 	}
-	if len(fields) != 2 || fields["application_path"] != target || fields["stop_timeout_seconds"] != float64(45) {
-		t.Fatalf("metadata fields = %v, want application path and stop timeout", fields)
+	if len(fields) != 3 || fields["application_path"] != target || fields["arguments"] != "--message hello world" || fields["stop_timeout_seconds"] != float64(45) {
+		t.Fatalf("metadata fields = %v, want application path, arguments, and stop timeout", fields)
+	}
+	if got := readServiceMetadataRecordFrom(metadataDirectory, "worker").Arguments; got != "--message hello world" {
+		t.Fatalf("arguments = %q, want installed arguments", got)
 	}
 	if got, ok := readServiceStopTimeoutFrom(metadataDirectory, "worker"); !ok || got != 45*time.Second {
 		t.Fatalf("stop timeout = %v, %v; want 45s, true", got, ok)
@@ -54,14 +57,17 @@ func TestServiceMetadataStoresResolvedApplicationPath(t *testing.T) {
 
 func TestServiceMetadataOverwrite(t *testing.T) {
 	directory := t.TempDir()
-	if err := writeServiceMetadataTo(directory, "worker", "/opt/worker-v1", 30*time.Second); err != nil {
+	if err := writeServiceMetadataTo(directory, "worker", "/opt/worker-v1", "--version 1", 30*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeServiceMetadataTo(directory, "worker", "/opt/worker-v2", 60*time.Second); err != nil {
+	if err := writeServiceMetadataTo(directory, "worker", "/opt/worker-v2", "--version 2", 60*time.Second); err != nil {
 		t.Fatal(err)
 	}
 	if got := readServiceMetadataFrom(directory, "worker"); got != "/opt/worker-v2" {
 		t.Fatalf("application path = %q, want overwritten path", got)
+	}
+	if got := readServiceMetadataRecordFrom(directory, "worker").Arguments; got != "--version 2" {
+		t.Fatalf("arguments = %q, want overwritten arguments", got)
 	}
 	if got, ok := readServiceStopTimeoutFrom(directory, "worker"); !ok || got != time.Minute {
 		t.Fatalf("stop timeout = %v, %v; want 1m0s, true", got, ok)
@@ -112,7 +118,7 @@ func TestReadServiceStopTimeoutAllowsOlderMetadata(t *testing.T) {
 
 func TestRemoveServiceMetadataAllowsMissingFile(t *testing.T) {
 	directory := t.TempDir()
-	if err := writeServiceMetadataTo(directory, "worker", "/opt/worker", 45*time.Second); err != nil {
+	if err := writeServiceMetadataTo(directory, "worker", "/opt/worker", "--port 8080", 45*time.Second); err != nil {
 		t.Fatal(err)
 	}
 	path, err := serviceMetadataPath(directory, "worker")

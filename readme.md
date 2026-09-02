@@ -87,6 +87,16 @@ List every service installed by this tool:
 ./daemon ls
 ```
 
+Show the application arguments recorded during installation:
+
+```sh
+./daemon list -l
+# Short form:
+./daemon ls -l
+```
+
+The arguments are displayed as received by daemon-util, joined with spaces.
+
 Example output:
 
 ```text
@@ -100,7 +110,7 @@ myservice  running  /opt/myservice/myapp
 | Command | Purpose |
 | --- | --- |
 | `install <name> <application> [arguments...]` | Register an application as a service |
-| `list` or `ls` | List services installed by daemon-util |
+| `list` or `ls` (`-l`, `--long`) | List services; long output includes application arguments |
 | `start <name>` | Start a service |
 | `stop <name>` | Stop a service |
 | `restart <name>` | Stop and start a service |
@@ -236,10 +246,11 @@ actions.
 
 ### Service list metadata
 
-The `APP` column is informational. daemon-util stores the resolved application
-path in the platform's application-data directory, but this metadata does not
+The `APP` column and the `ARGS` column shown by `list -l` are informational.
+daemon-util stores the resolved application path and the application arguments
+in the platform's application-data directory, but this metadata does not
 control the service. Installation and listing still work if metadata cannot be
-written or read; the `APP` value will be blank. Removal deletes metadata on a
+written or read; the values will be blank. Removal deletes metadata on a
 best-effort basis.
 
 ## Testing

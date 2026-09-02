@@ -170,6 +170,26 @@ func TestListCommandHasLSAlias(t *testing.T) {
 	}
 }
 
+func TestListCommandAcceptsLongFlag(t *testing.T) {
+	app := newCommand()
+	listCommand := app.Command("list")
+	if listCommand == nil {
+		t.Fatal("list command not found")
+	}
+
+	var long bool
+	listCommand.Action = func(_ context.Context, command *cli.Command) error {
+		long = command.Bool("long")
+		return nil
+	}
+	if err := app.Run(context.Background(), []string{"daemon-util", "ls", "-l"}); err != nil {
+		t.Fatal(err)
+	}
+	if !long {
+		t.Fatal("ls -l did not enable long output")
+	}
+}
+
 func TestRemoveCommandHasDeleteAlias(t *testing.T) {
 	app := newCommand()
 	removeCommand := app.Command("remove")
@@ -194,15 +214,31 @@ func TestWriteServiceList(t *testing.T) {
 	var output bytes.Buffer
 	services := []daemon_util.ServiceStatus{
 		{Name: "api", Status: daemon_util.ServiceStopped},
-		{Name: "worker", Status: daemon_util.ServiceRunning, ApplicationPath: "/opt/worker"},
+		{Name: "worker", Status: daemon_util.ServiceRunning, ApplicationPath: "/opt/worker", Arguments: "--message hello world"},
 	}
-	if err := writeServiceList(&output, services); err != nil {
+	if err := writeServiceList(&output, services, false); err != nil {
 		t.Fatal(err)
 	}
 
 	want := "NAME    STATUS   APP\napi     stopped  \nworker  running  /opt/worker\n"
 	if output.String() != want {
 		t.Fatalf("list output = %q, want %q", output.String(), want)
+	}
+}
+
+func TestWriteLongServiceList(t *testing.T) {
+	var output bytes.Buffer
+	services := []daemon_util.ServiceStatus{
+		{Name: "api", Status: daemon_util.ServiceStopped},
+		{Name: "worker", Status: daemon_util.ServiceRunning, ApplicationPath: "/opt/worker", Arguments: "--message hello world"},
+	}
+	if err := writeServiceList(&output, services, true); err != nil {
+		t.Fatal(err)
+	}
+
+	want := "NAME    STATUS   APP          ARGS\napi     stopped               \nworker  running  /opt/worker  --message hello world\n"
+	if output.String() != want {
+		t.Fatalf("long list output = %q, want %q", output.String(), want)
 	}
 }
 

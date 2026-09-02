@@ -78,7 +78,7 @@ func install(_ context.Context, command *cli.Command) error {
 	if err != nil {
 		return err
 	}
-	if err := writeServiceMetadata(args[0], executablePath, command.Duration("stop-timeout")); err != nil {
+	if err := writeServiceMetadata(args[0], executablePath, strings.Join(args[2:], " "), command.Duration("stop-timeout")); err != nil {
 		_ = removeServiceMetadata(args[0])
 	}
 	fmt.Println(result)
@@ -86,24 +86,34 @@ func install(_ context.Context, command *cli.Command) error {
 	return nil
 }
 
-func list(_ context.Context, _ *cli.Command) error {
+func list(_ context.Context, command *cli.Command) error {
 	services, err := daemon_util.ListServiceStatuses()
 	if err != nil {
 		return err
 	}
 	for index := range services {
-		services[index].ApplicationPath = readServiceMetadata(services[index].Name)
+		metadata := readServiceMetadataRecord(services[index].Name)
+		services[index].ApplicationPath = metadata.ApplicationPath
+		services[index].Arguments = metadata.Arguments
 	}
-	return writeServiceList(os.Stdout, services)
+	return writeServiceList(os.Stdout, services, command.Bool("long"))
 }
 
-func writeServiceList(output io.Writer, services []daemon_util.ServiceStatus) error {
+func writeServiceList(output io.Writer, services []daemon_util.ServiceStatus, long bool) error {
 	writer := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(writer, "NAME\tSTATUS\tAPP"); err != nil {
+	header := "NAME\tSTATUS\tAPP"
+	if long {
+		header += "\tARGS"
+	}
+	if _, err := fmt.Fprintln(writer, header); err != nil {
 		return err
 	}
 	for _, service := range services {
-		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\n", service.Name, service.Status, service.ApplicationPath); err != nil {
+		line := fmt.Sprintf("%s\t%s\t%s", service.Name, service.Status, service.ApplicationPath)
+		if long {
+			line += "\t" + service.Arguments
+		}
+		if _, err := fmt.Fprintln(writer, line); err != nil {
 			return err
 		}
 	}

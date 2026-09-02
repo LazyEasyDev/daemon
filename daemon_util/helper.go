@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by
-// license that can be found in the LICENSE file.
+// Copyright (c) 2026 LazyEasyDev
+// Licensed under the MIT License. See LICENSE in the project root.
 
 package daemon_util
 

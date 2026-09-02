@@ -1,5 +1,6 @@
 #!/bin/sh
-# Copyright 2026 LazyEasyDev Foundation Ltd.
+# Copyright (c) 2026 LazyEasyDev
+# Licensed under the MIT License. See LICENSE in the project root.
 
 set -eu
 

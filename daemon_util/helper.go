@@ -189,8 +189,12 @@ func systemdQuoteArgs(args []string) string {
 	return quoteArgs(args, systemdQuote)
 }
 
-func systemdConfigQuote(value string) string {
-	return strings.ReplaceAll(strconv.Quote(value), "%", "%%")
+func systemdDescription(value string) string {
+	escaped := strings.ReplaceAll(value, "%", "%%")
+	if strings.HasSuffix(escaped, `\`) {
+		return escaped + " "
+	}
+	return escaped
 }
 
 func systemdPathValue(value string) string {

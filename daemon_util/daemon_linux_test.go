@@ -21,7 +21,7 @@ func TestLinuxTemplatesConfigureStopTimeout(t *testing.T) {
 	funcs := template.FuncMap{
 		"shellQuote":         shellQuote,
 		"systemdQuote":       systemdQuote,
-		"systemdConfigQuote": systemdConfigQuote,
+		"systemdDescription": systemdDescription,
 		"systemdPathValue":   systemdPathValue,
 		"upstartQuote":       upstartQuote,
 	}
@@ -59,7 +59,7 @@ func TestLinuxTemplatesConfigureWorkingDirectory(t *testing.T) {
 	funcs := template.FuncMap{
 		"shellQuote":         shellQuote,
 		"systemdQuote":       systemdQuote,
-		"systemdConfigQuote": systemdConfigQuote,
+		"systemdDescription": systemdDescription,
 		"systemdPathValue":   systemdPathValue,
 		"upstartQuote":       upstartQuote,
 	}
@@ -70,6 +70,7 @@ func TestLinuxTemplatesConfigureWorkingDirectory(t *testing.T) {
 		wants            []string
 	}{
 		{name: "systemd", source: defaultSystemDConfig, workingDirectory: "/opt/worker % files", wants: []string{
+			"Description=worker",
 			"ExecStart=" + systemdQuote("/opt/worker % files/worker"),
 			"WorkingDirectory=/opt/worker %% files",
 		}},
@@ -117,6 +118,27 @@ func TestSystemDPathValueEscapesSpecifiers(t *testing.T) {
 	want := "/opt/worker %% files"
 	if got != want {
 		t.Fatalf("systemdPathValue() = %q, want %q", got, want)
+	}
+}
+
+func TestSystemDDescriptionPreservesTextAndEscapesSpecifiers(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{name: "plain", value: "worker service", want: "worker service"},
+		{name: "specifier", value: "worker 100% service", want: "worker 100%% service"},
+		{name: "quotes and backslash", value: `worker "quoted" \ path`, want: `worker "quoted" \ path`},
+		{name: "trailing backslash", value: `worker\`, want: "worker\\ "},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := systemdDescription(test.value); got != test.want {
+				t.Fatalf("systemdDescription() = %q, want %q", got, test.want)
+			}
+		})
 	}
 }
 

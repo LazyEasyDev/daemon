@@ -84,7 +84,7 @@ func (linux *systemDRecord) Install(args ...string) (string, error) {
 
 	funcs := template.FuncMap{
 		"systemdQuote":       systemdQuote,
-		"systemdConfigQuote": systemdConfigQuote,
+		"systemdDescription": systemdDescription,
 		"systemdPathValue":   systemdPathValue,
 	}
 	if err := writeTemplateFile(
@@ -214,7 +214,7 @@ func (linux *systemDRecord) Status() (string, error) {
 }
 
 const defaultSystemDConfig = `[Unit]
-Description={{systemdConfigQuote .Description}}
+Description={{systemdDescription .Description}}
 
 [Service]
 Type=exec

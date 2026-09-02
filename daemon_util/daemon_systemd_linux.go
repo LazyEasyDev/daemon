@@ -221,6 +221,7 @@ Type=exec
 ExecStart={{systemdQuote .Path}} {{.Args}}
 WorkingDirectory={{systemdPathValue .WorkingDirectory}}
 Restart=on-failure
+RestartPreventExitStatus=203
 RestartSec=20s
 TimeoutStopSec={{.StopTimeoutSeconds}}s
 KillMode=control-group

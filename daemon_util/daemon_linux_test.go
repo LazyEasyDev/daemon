@@ -55,6 +55,13 @@ func TestLinuxTemplatesConfigureStopTimeout(t *testing.T) {
 	}
 }
 
+func TestSystemDTemplateDoesNotRestartExecFailures(t *testing.T) {
+	want := "Restart=on-failure\nRestartPreventExitStatus=203\nRestartSec=20s"
+	if !strings.Contains(defaultSystemDConfig, want) {
+		t.Fatalf("systemd template does not contain %q", want)
+	}
+}
+
 func TestLinuxTemplatesConfigureWorkingDirectory(t *testing.T) {
 	funcs := template.FuncMap{
 		"shellQuote":         shellQuote,

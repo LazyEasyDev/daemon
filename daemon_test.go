@@ -2,10 +2,23 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 )
+
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) {
+	return 0, errors.New("read failed")
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) {
+	return 0, errors.New("write failed")
+}
 
 func TestConfirmInstallWarning(t *testing.T) {
 	tests := []struct {
@@ -42,6 +55,17 @@ func TestConfirmInstallWarning(t *testing.T) {
 				t.Fatalf("ignored warning output = %q, want empty", output.String())
 			}
 		})
+	}
+}
+
+func TestConfirmInstallWarningFailuresDoNotBlockInstallation(t *testing.T) {
+	if err := confirmInstallWarning(strings.NewReader("yes\n"), failingWriter{}, "Warning: risky deployment", false, true); err != nil {
+		t.Fatalf("warning output failure blocked installation: %v", err)
+	}
+
+	var output bytes.Buffer
+	if err := confirmInstallWarning(failingReader{}, &output, "Warning: risky deployment", false, true); err != nil {
+		t.Fatalf("warning input failure blocked installation: %v", err)
 	}
 }
 

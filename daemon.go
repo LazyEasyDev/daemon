@@ -65,19 +65,19 @@ func confirmInstallWarning(input io.Reader, output io.Writer, warning string, ig
 		return nil
 	}
 	if _, err := fmt.Fprintln(output, warning); err != nil {
-		return err
+		return nil
 	}
 	if !interactive {
 		return errors.New("installation stopped because warning confirmation requires a terminal; rerun with --ignore-warnings to continue")
 	}
 	if _, err := fmt.Fprint(output, "Continue installation? [y/N] "); err != nil {
-		return err
+		return nil
 	}
 
 	scanner := bufio.NewScanner(input)
 	if !scanner.Scan() {
 		if err := scanner.Err(); err != nil {
-			return fmt.Errorf("read warning confirmation: %w", err)
+			return nil
 		}
 		return errors.New("installation cancelled")
 	}

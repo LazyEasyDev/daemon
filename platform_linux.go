@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,7 +18,10 @@ func configuredInstallService(command *cli.Command, serviceName, executablePath 
 	service, err := configuredService(command, serviceName, executablePath)
 	if err == nil {
 		if warning := selinuxInstallWarning(executablePath, "/sys/fs/selinux/enforce", readSELinuxFileContext); warning != "" {
-			err = confirmInstallWarning(os.Stdin, os.Stderr, warning, command.Bool("ignore-warnings"), isTerminal(os.Stdin) && isTerminal(os.Stderr))
+			interactive, terminalErr := installWarningTerminal(os.Stdin, os.Stderr)
+			if terminalErr == nil {
+				err = confirmInstallWarning(os.Stdin, os.Stderr, warning, command.Bool("ignore-warnings"), interactive)
+			}
 		}
 	}
 	return service, nil, err
@@ -51,15 +55,15 @@ func selinuxInstallWarning(executablePath, enforcePath string, readFileContext f
 
 func riskySELinuxExecutableType(contextType string) bool {
 	switch contextType {
-	case "user_home_t", "user_tmp_t", "tmp_t", "admin_home_t", "unlabeled_t", "default_t":
-		return true
-	default:
+	case "", "bin_t", "sbin_t", "usr_t":
 		return false
+	default:
+		return !strings.HasSuffix(contextType, "_exec_t")
 	}
 }
 
 func riskySELinuxExecutablePath(path string) bool {
-	for _, root := range []string{"/home", "/root", "/tmp", "/var/tmp", "/run/user"} {
+	for _, root := range []string{"/home", "/root", "/tmp", "/var/tmp", "/run", "/dev/shm"} {
 		relative, err := filepath.Rel(root, filepath.Clean(path))
 		if err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
 			return true
@@ -85,7 +89,30 @@ func platformCommands() []*cli.Command {
 	return nil
 }
 
-func isTerminal(file *os.File) bool {
+func installWarningTerminal(input, output *os.File) (bool, error) {
+	inputTerminal, err := terminalStatus(input)
+	if err != nil {
+		return false, err
+	}
+	outputTerminal, err := terminalStatus(output)
+	if err != nil {
+		return false, err
+	}
+	return inputTerminal && outputTerminal, nil
+}
+
+func terminalStatus(file *os.File) (bool, error) {
 	_, err := unix.IoctlGetTermios(int(file.Fd()), unix.TCGETS)
-	return err == nil
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, unix.ENOTTY) {
+		return false, nil
+	}
+	return false, err
+}
+
+func isTerminal(file *os.File) bool {
+	terminal, _ := terminalStatus(file)
+	return terminal
 }

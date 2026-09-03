@@ -128,6 +128,9 @@ func (linux *systemVRecord) Remove() (string, error) {
 		return removeAction + failed, ErrNotInstalled
 	}
 
+	if err := disableInstalledWatcher(linux.servicePath()); err != nil {
+		return removeAction + failed, err
+	}
 	var removeErrors []error
 	for _, path := range append(linux.serviceLinks(), linux.servicePath()) {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -273,6 +276,14 @@ stop_timeout={{.StopTimeoutSeconds}}
 
 [ -e /etc/sysconfig/$proc ] && . /etc/sysconfig/$proc
 
+init_script=${INIT_SCRIPT:-${init_script:-/etc/init.d/$proc}}
+restart_delay=${RESTART_DELAY:-${restart_delay:-30}}
+watcher_pidfile=${WATCHER_PIDFILE:-${watcher_pidfile:-${pidfile%.pid}.watchdog.pid}}
+
+case "$restart_delay" in
+	''|0|*[!0-9]*) restart_delay=30 ;;
+esac
+
 read_pid() {
 	[ -r "$pidfile" ] || return 1
 	pid=$(cat "$pidfile")
@@ -280,6 +291,15 @@ read_pid() {
 		''|*[!0-9]*) return 1 ;;
 	esac
 	[ "$pid" -gt 1 ]
+}
+
+read_watcher_pid() {
+	[ -r "$watcher_pidfile" ] || return 1
+	watcher_pid=$(cat "$watcher_pidfile")
+	case "$watcher_pid" in
+		''|*[!0-9]*) return 1 ;;
+	esac
+	[ "$watcher_pid" -gt 1 ]
 }
 
 is_expected_process() {
@@ -292,17 +312,118 @@ is_process_group_running() {
 	kill -0 -- "-$pid" 2>/dev/null
 }
 
-start() {
+is_watcher_process() {
+	[ -r "/proc/$watcher_pid/cmdline" ] || return 1
+	watcher_identity=$(tr '\000' '\n' < "/proc/$watcher_pid/cmdline" | sed -n '2,3p')
+	[ "$watcher_identity" = "$init_script
+watch" ]
+}
+
+watcher_owns_pidfile() {
+	read_watcher_pid && [ "$watcher_pid" -eq "$$" ]
+}
+
+acquire_watcher_pidfile() {
+	(umask 022; set -C; printf '%s\n' "$$" > "$watcher_pidfile") 2>/dev/null
+}
+
+cleanup_watcher() {
+	if watcher_owns_pidfile; then
+		rm -f "$watcher_pidfile"
+	fi
+}
+
+stop_watcher_loop() {
+	if [ -n "$watcher_sleep_pid" ]; then
+		kill "$watcher_sleep_pid" 2>/dev/null
+		wait "$watcher_sleep_pid" 2>/dev/null
+	fi
+	exit 0
+}
+
+watcher_sleep() {
+	sleep "$1" &
+	watcher_sleep_pid=$!
+	wait "$watcher_sleep_pid" 2>/dev/null
+	watcher_sleep_pid=
+}
+
+watch() {
+	acquire_watcher_pidfile || return 0
+	watcher_sleep_pid=
+	trap 'stop_watcher_loop' HUP INT TERM
+	trap 'cleanup_watcher' 0
+
+	while watcher_owns_pidfile; do
+		if is_expected_process; then
+			watcher_sleep 1
+			continue
+		fi
+		watcher_sleep "$restart_delay"
+		watcher_owns_pidfile || break
+		if ! is_expected_process; then
+			"$init_script" start watched >/dev/null 2>&1
+		fi
+	done
+}
+
+start_watcher() {
+	if [ -e "$watcher_pidfile" ]; then
+		if read_watcher_pid && is_watcher_process; then
+			return 0
+		fi
+		rm -f "$watcher_pidfile" || return 1
+	fi
+	"$init_script" watch >/dev/null 2>&1 &
+
+	elapsed=0
+	while [ "$elapsed" -lt 5 ]; do
+		if read_watcher_pid && is_watcher_process; then
+			return 0
+		fi
+		sleep 1
+		elapsed=$((elapsed + 1))
+	done
+	return 1
+}
+
+disable_watcher() {
+	[ -e "$watcher_pidfile" ] || return 0
+	if ! read_watcher_pid || ! is_watcher_process; then
+		rm -f "$watcher_pidfile"
+		return $?
+	fi
+	rm -f "$watcher_pidfile" || return 1
+	if ! kill -TERM "$watcher_pid" 2>/dev/null; then
+		is_watcher_process && return 1
+		return 0
+	fi
+
+	elapsed=0
+	while is_watcher_process && [ "$elapsed" -lt 5 ]; do
+		sleep 1
+		elapsed=$((elapsed + 1))
+	done
+	if is_watcher_process && ! kill -KILL "$watcher_pid" 2>/dev/null; then
+		return 1
+	fi
+	return 0
+}
+
+start_from_watch() {
 	[ -x "$exec" ] || exit 5
 	command -v setsid >/dev/null 2>&1 || exit 5
 	cd "$working_directory" || exit 5
 
 	if [ -f "$pidfile" ]; then
-		if read_pid && ! is_expected_process && ! kill -0 "$pid" 2>/dev/null; then
-			rm -f "$pidfile"
-			if [ -f "$lockfile" ]; then
-				rm -f "$lockfile"
+		if ! read_pid; then
+			rm -f "$pidfile" "$lockfile"
+		elif ! is_expected_process; then
+			if kill -0 "$pid" 2>/dev/null; then
+				printf '%s still exists...\n' "$pidfile"
+				return 7
 			fi
+			rm -f "$pidfile" "$lockfile"
 		fi
 	fi
 
@@ -331,11 +452,26 @@ start() {
 	fi
 }
 
+start() {
+	if ! is_expected_process; then
+		start_from_watch || return $?
+	fi
+	if ! start_watcher; then
+		printf 'Warning: %s watcher could not start\n' "$proc" >&2
+	fi
+	return 0
+}
+
 stop() {
 	printf 'Stopping %s:\t' "$servname"
-	if ! read_pid; then
+	if ! disable_watcher; then
 		echo "FAIL"
 		return 1
+	fi
+	if ! read_pid; then
+		rm -f "$pidfile" "$lockfile"
+		echo "OK"
+		return 0
 	fi
 	if ! kill -0 "$pid" 2>/dev/null; then
 		rm -f "$pidfile" "$lockfile"
@@ -383,17 +519,24 @@ service_status() {
 		printf '%s (pid  %s) is running...\n' "$proc" "$pid"
 		return 0
 	fi
+	if read_watcher_pid && is_watcher_process; then
+		printf '%s is running (watcher pid %s)...\n' "$proc" "$watcher_pid"
+		return 0
+	fi
+	rm -f "$watcher_pidfile"
 	printf '%s is stopped\n' "$proc"
 	return 3
 }
 
 case "$1" in
 	start)
-		service_status >/dev/null 2>&1 && exit 0
-		start
+		if [ "$2" = "watched" ]; then
+			is_expected_process || start_from_watch
+		else
+			start
+		fi
 		;;
 	stop)
-		service_status >/dev/null 2>&1 || exit 0
 		stop
 		;;
 	restart)
@@ -401,6 +544,12 @@ case "$1" in
 		;;
 	status)
 		service_status
+		;;
+	watch)
+		watch
+		;;
+	unwatch)
+		disable_watcher
 		;;
 	*)
 		printf 'Usage: %s {start|stop|status|restart}\n' "$0"

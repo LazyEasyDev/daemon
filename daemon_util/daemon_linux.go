@@ -192,6 +192,17 @@ func buildrootStyleInitDetected(root string) bool {
 	return false
 }
 
+func disableInstalledWatcher(servicePath string) error {
+	content, err := os.ReadFile(servicePath)
+	if err != nil {
+		return err
+	}
+	if !strings.Contains(string(content), "WATCHER_PIDFILE") {
+		return nil
+	}
+	return exec.Command(servicePath, "unwatch").Run()
+}
+
 func containsAny(value string, identifiers []string) bool {
 	for _, identifier := range identifiers {
 		if strings.Contains(value, identifier) {

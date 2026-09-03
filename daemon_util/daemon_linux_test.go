@@ -414,6 +414,135 @@ func TestBuildrootValidatesProcessBeforeSignals(t *testing.T) {
 	}
 }
 
+func TestLegacyLinuxTemplatesSuperviseApplications(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+		wants  []string
+	}{
+		{name: "Buildroot", source: defaultBuildrootConfig, wants: []string{
+			`WATCHER_PIDFILE=${WATCHER_PIDFILE:-${PIDFILE%.pid}.watchdog.pid}`,
+			`(umask 022; set -C; printf '%s\n' "$$" > "$WATCHER_PIDFILE")`,
+			`watcher_identity=$(tr '\000' '\n' < "/proc/$watcher_pid/cmdline" | sed -n '2,3p')`,
+			`while watcher_owns_pidfile; do`,
+			`if is_running; then`,
+			`watcher_sleep 1`,
+			`watcher_sleep "$RESTART_DELAY"`,
+			`"$INIT_SCRIPT" start watched`,
+			`start() {`,
+			`start_from_watch || return $?`,
+			`if ! start_watcher; then`,
+			`Warning: $NAME watcher could not start`,
+			`if ! disable_watcher; then`,
+			"unwatch)\n\t\tdisable_watcher",
+		}},
+		{name: "System V", source: defaultSystemVConfig, wants: []string{
+			`watcher_pidfile=${WATCHER_PIDFILE:-${watcher_pidfile:-${pidfile%.pid}.watchdog.pid}}`,
+			`(umask 022; set -C; printf '%s\n' "$$" > "$watcher_pidfile")`,
+			`watcher_identity=$(tr '\000' '\n' < "/proc/$watcher_pid/cmdline" | sed -n '2,3p')`,
+			`while watcher_owns_pidfile; do`,
+			`if is_expected_process; then`,
+			`watcher_sleep 1`,
+			`watcher_sleep "$restart_delay"`,
+			`"$init_script" start watched`,
+			`start() {`,
+			`start_from_watch || return $?`,
+			`if ! start_watcher; then`,
+			`Warning: %s watcher could not start`,
+			`if ! disable_watcher; then`,
+			"unwatch)\n\t\tdisable_watcher",
+		}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for _, want := range test.wants {
+				if !strings.Contains(test.source, want) {
+					t.Errorf("template does not contain %q", want)
+				}
+			}
+			watchedStart := strings.Index(test.source, `start watched`)
+			disableWatcher := strings.Index(test.source, `if ! disable_watcher; then`)
+			if watchedStart < 0 || disableWatcher < 0 {
+				t.Fatal("template watcher control flow is incomplete")
+			}
+			applicationStop := strings.Index(test.source[disableWatcher:], `if ! is_running; then`)
+			if test.name == "System V" {
+				applicationStop = strings.Index(test.source[disableWatcher:], `if ! read_pid; then`)
+			}
+			if applicationStop < 0 {
+				t.Fatal("template watcher control flow is incomplete")
+			}
+			for _, unwanted := range []string{"/var/run/daemon-util", "prepare_watcher_directory", "WATCH_INTERVAL", "watch_interval"} {
+				if strings.Contains(test.source, unwanted) {
+					t.Errorf("template still contains obsolete watcher directory logic %q", unwanted)
+				}
+			}
+		})
+	}
+}
+
+func TestSystemVWatcherSettingsFollowSysconfig(t *testing.T) {
+	sysconfig := `[ -e /etc/sysconfig/$proc ] && . /etc/sysconfig/$proc`
+	settings := []string{
+		`init_script=${INIT_SCRIPT:-${init_script:-/etc/init.d/$proc}}`,
+		`restart_delay=${RESTART_DELAY:-${restart_delay:-30}}`,
+		`watcher_pidfile=${WATCHER_PIDFILE:-${watcher_pidfile:-${pidfile%.pid}.watchdog.pid}}`,
+	}
+
+	sysconfigIndex := strings.Index(defaultSystemVConfig, sysconfig)
+	if sysconfigIndex < 0 {
+		t.Fatalf("System V config does not contain %q", sysconfig)
+	}
+	for _, setting := range settings {
+		settingIndex := strings.Index(defaultSystemVConfig, setting)
+		if settingIndex < 0 {
+			t.Errorf("System V config does not contain %q", setting)
+		} else if settingIndex < sysconfigIndex {
+			t.Errorf("System V setting %q is resolved before sysconfig", setting)
+		}
+	}
+}
+
+func TestLegacyLinuxTemplateWatcherIdentityPrecedesSignal(t *testing.T) {
+	tests := []struct {
+		name          string
+		source        string
+		identityCheck string
+		removePIDFile string
+		termSignal    string
+	}{
+		{
+			name:          "Buildroot",
+			source:        defaultBuildrootConfig,
+			identityCheck: `if ! read_watcher_pid || ! is_watcher_process; then`,
+			removePIDFile: `rm -f "$WATCHER_PIDFILE" || return 1`,
+			termSignal:    `kill -TERM "$watcher_pid"`,
+		},
+		{
+			name:          "System V",
+			source:        defaultSystemVConfig,
+			identityCheck: `if ! read_watcher_pid || ! is_watcher_process; then`,
+			removePIDFile: `rm -f "$watcher_pidfile" || return 1`,
+			termSignal:    `kill -TERM "$watcher_pid"`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			identityIndex := strings.Index(test.source, test.identityCheck)
+			if identityIndex < 0 {
+				t.Fatal("template does not validate watcher identity")
+			}
+			removeIndex := strings.Index(test.source[identityIndex:], test.removePIDFile)
+			signalIndex := strings.Index(test.source[identityIndex:], test.termSignal)
+			if removeIndex < 0 || signalIndex < 0 || removeIndex >= signalIndex {
+				t.Fatal("watcher identity must be validated and disabled before it is signaled")
+			}
+		})
+	}
+}
+
 func TestSystemVValidatesProcessBeforeSignals(t *testing.T) {
 	for _, command := range []string{
 		`[ "$pid" -gt 1 ]`,
@@ -443,8 +572,6 @@ func TestSystemVStatusDoesNotRequireRedHatHelpers(t *testing.T) {
 	for _, setting := range []string{
 		`service_status() {`,
 		`printf '%s (pid  %s) is running...\n' "$proc" "$pid"`,
-		`service_status >/dev/null 2>&1 && exit 0`,
-		`service_status >/dev/null 2>&1 || exit 0`,
 	} {
 		if !strings.Contains(defaultSystemVConfig, setting) {
 			t.Fatalf("System V config does not contain %q", setting)
@@ -606,5 +733,25 @@ func TestBuildrootStyleInitDetected(t *testing.T) {
 				t.Fatalf("buildrootStyleInitDetected() = %v, want %v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestDisableInstalledWatcherPreservesLegacyRemoval(t *testing.T) {
+	directory := t.TempDir()
+	legacyScript := filepath.Join(directory, "legacy")
+	if err := os.WriteFile(legacyScript, []byte("#!/bin/sh\nexit 7\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := disableInstalledWatcher(legacyScript); err != nil {
+		t.Fatalf("legacy script must not receive unwatch: %v", err)
+	}
+
+	watchedScript := filepath.Join(directory, "watched")
+	content := "#!/bin/sh\n# WATCHER_PIDFILE\n[ \"$1\" = unwatch ]\n"
+	if err := os.WriteFile(watchedScript, []byte(content), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := disableInstalledWatcher(watchedScript); err != nil {
+		t.Fatalf("watcher-aware script did not receive unwatch: %v", err)
 	}
 }

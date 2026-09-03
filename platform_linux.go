@@ -46,9 +46,9 @@ func selinuxInstallWarning(executablePath, enforcePath string, readFileContext f
 
 	contextDescription := ""
 	if validContext {
-		contextDescription = fmt.Sprintf(" (context %q)", context)
+		contextDescription = fmt.Sprintf("\n  Context: %q", context)
 	}
-	return fmt.Sprintf("Warning: SELinux is enforcing and may prevent the system service from executing %q%s; consider deploying the application bundle under a root-owned path such as /opt/<application> and configure a persistent SELinux file context for the executable. Moving files alone may preserve the current label.", executablePath, contextDescription)
+	return fmt.Sprintf("Warning: SELinux may prevent this system service from starting.\n  Executable: %q%s\nSuggestion:\n  Deploy the application bundle under a root-owned path, such as:\n    /opt/<application>\n  Configure a persistent SELinux file context for the executable.\n  Moving files alone may preserve the current label.", executablePath, contextDescription)
 }
 
 func selinuxContextType(context string) (string, bool) {

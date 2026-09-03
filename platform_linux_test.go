@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -20,8 +19,16 @@ func TestSELinuxInstallWarning(t *testing.T) {
 	warning := selinuxInstallWarning(executablePath, enforcePath, func(string) (string, error) {
 		return "unconfined_u:object_r:user_home_t:s0", nil
 	})
-	if !strings.Contains(warning, executablePath) || !strings.Contains(warning, "user_home_t") || !strings.Contains(warning, "/opt/<application>") {
-		t.Fatalf("warning = %q, want executable path, context, and remediation", warning)
+	want := "Warning: SELinux may prevent this system service from starting.\n" +
+		"  Executable: \"/home/user/app\"\n" +
+		"  Context: \"unconfined_u:object_r:user_home_t:s0\"\n" +
+		"Suggestion:\n" +
+		"  Deploy the application bundle under a root-owned path, such as:\n" +
+		"    /opt/<application>\n" +
+		"  Configure a persistent SELinux file context for the executable.\n" +
+		"  Moving files alone may preserve the current label."
+	if warning != want {
+		t.Fatalf("warning = %q, want %q", warning, want)
 	}
 }
 

@@ -191,21 +191,18 @@ func (linux *buildrootRecord) Status() (string, error) {
 
 const defaultBuildrootConfig = `#!/bin/sh
 
+# daemon-util-watchdog
+
 NAME={{shellQuote .Name}}
 DAEMON={{shellQuote .Path}}
 WORKING_DIRECTORY={{shellQuote .WorkingDirectory}}
-INIT_SCRIPT=${INIT_SCRIPT:-/etc/init.d/S90$NAME}
 PIDFILE=${PIDFILE:-/var/run/$NAME.pid}
-RESTART_DELAY=${RESTART_DELAY:-30}
 STOP_TIMEOUT={{.StopTimeoutSeconds}}
 
 [ -r "/etc/default/$NAME" ] && . "/etc/default/$NAME" "$1"
 
-WATCHER_PIDFILE=${WATCHER_PIDFILE:-${PIDFILE%.pid}.watchdog.pid}
-
-case "$RESTART_DELAY" in
-	''|0|*[!0-9]*) RESTART_DELAY=30 ;;
-esac
+INIT_SCRIPT=/etc/init.d/S90{{.Name}}
+WATCHER_PIDFILE=${PIDFILE%.pid}.watchdog.pid
 
 read_pid() {
 	[ -r "$PIDFILE" ] || return 1
@@ -272,7 +269,7 @@ watch() {
 			watcher_sleep 1
 			continue
 		fi
-		watcher_sleep "$RESTART_DELAY"
+		watcher_sleep 30
 		watcher_owns_pidfile || break
 		if ! is_running; then
 			"$INIT_SCRIPT" start watched >/dev/null 2>&1

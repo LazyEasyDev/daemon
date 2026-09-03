@@ -245,6 +245,7 @@ func existingSystemVServiceLinks(root, name string) ([]string, bool) {
 }
 
 const defaultSystemVConfig = `#! /bin/sh
+# daemon-util-watchdog
 #
 #       /etc/rc.d/init.d/{{.Name}}
 #
@@ -276,13 +277,8 @@ stop_timeout={{.StopTimeoutSeconds}}
 
 [ -e /etc/sysconfig/$proc ] && . /etc/sysconfig/$proc
 
-init_script=${INIT_SCRIPT:-${init_script:-/etc/init.d/$proc}}
-restart_delay=${RESTART_DELAY:-${restart_delay:-30}}
-watcher_pidfile=${WATCHER_PIDFILE:-${watcher_pidfile:-${pidfile%.pid}.watchdog.pid}}
-
-case "$restart_delay" in
-	''|0|*[!0-9]*) restart_delay=30 ;;
-esac
+init_script=/etc/init.d/{{.Name}}
+watcher_pidfile=${pidfile%.pid}.watchdog.pid
 
 read_pid() {
 	[ -r "$pidfile" ] || return 1
@@ -359,7 +355,7 @@ watch() {
 			watcher_sleep 1
 			continue
 		fi
-		watcher_sleep "$restart_delay"
+		watcher_sleep 30
 		watcher_owns_pidfile || break
 		if ! is_expected_process; then
 			"$init_script" start watched >/dev/null 2>&1

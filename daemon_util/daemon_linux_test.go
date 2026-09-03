@@ -421,13 +421,14 @@ func TestLegacyLinuxTemplatesSuperviseApplications(t *testing.T) {
 		wants  []string
 	}{
 		{name: "Buildroot", source: defaultBuildrootConfig, wants: []string{
-			`WATCHER_PIDFILE=${WATCHER_PIDFILE:-${PIDFILE%.pid}.watchdog.pid}`,
+			`INIT_SCRIPT=/etc/init.d/S90{{.Name}}`,
+			`WATCHER_PIDFILE=${PIDFILE%.pid}.watchdog.pid`,
 			`(umask 022; set -C; printf '%s\n' "$$" > "$WATCHER_PIDFILE")`,
 			`watcher_identity=$(tr '\000' '\n' < "/proc/$watcher_pid/cmdline" | sed -n '2,3p')`,
 			`while watcher_owns_pidfile; do`,
 			`if is_running; then`,
 			`watcher_sleep 1`,
-			`watcher_sleep "$RESTART_DELAY"`,
+			`watcher_sleep 30`,
 			`"$INIT_SCRIPT" start watched`,
 			`start() {`,
 			`start_from_watch || return $?`,
@@ -437,13 +438,14 @@ func TestLegacyLinuxTemplatesSuperviseApplications(t *testing.T) {
 			"unwatch)\n\t\tdisable_watcher",
 		}},
 		{name: "System V", source: defaultSystemVConfig, wants: []string{
-			`watcher_pidfile=${WATCHER_PIDFILE:-${watcher_pidfile:-${pidfile%.pid}.watchdog.pid}}`,
+			`init_script=/etc/init.d/{{.Name}}`,
+			`watcher_pidfile=${pidfile%.pid}.watchdog.pid`,
 			`(umask 022; set -C; printf '%s\n' "$$" > "$watcher_pidfile")`,
 			`watcher_identity=$(tr '\000' '\n' < "/proc/$watcher_pid/cmdline" | sed -n '2,3p')`,
 			`while watcher_owns_pidfile; do`,
 			`if is_expected_process; then`,
 			`watcher_sleep 1`,
-			`watcher_sleep "$restart_delay"`,
+			`watcher_sleep 30`,
 			`"$init_script" start watched`,
 			`start() {`,
 			`start_from_watch || return $?`,
@@ -473,34 +475,12 @@ func TestLegacyLinuxTemplatesSuperviseApplications(t *testing.T) {
 			if applicationStop < 0 {
 				t.Fatal("template watcher control flow is incomplete")
 			}
-			for _, unwanted := range []string{"/var/run/daemon-util", "prepare_watcher_directory", "WATCH_INTERVAL", "watch_interval"} {
+			for _, unwanted := range []string{"/var/run/daemon-util", "prepare_watcher_directory", "WATCH_INTERVAL", "watch_interval", "RESTART_DELAY", "restart_delay"} {
 				if strings.Contains(test.source, unwanted) {
 					t.Errorf("template still contains obsolete watcher directory logic %q", unwanted)
 				}
 			}
 		})
-	}
-}
-
-func TestSystemVWatcherSettingsFollowSysconfig(t *testing.T) {
-	sysconfig := `[ -e /etc/sysconfig/$proc ] && . /etc/sysconfig/$proc`
-	settings := []string{
-		`init_script=${INIT_SCRIPT:-${init_script:-/etc/init.d/$proc}}`,
-		`restart_delay=${RESTART_DELAY:-${restart_delay:-30}}`,
-		`watcher_pidfile=${WATCHER_PIDFILE:-${watcher_pidfile:-${pidfile%.pid}.watchdog.pid}}`,
-	}
-
-	sysconfigIndex := strings.Index(defaultSystemVConfig, sysconfig)
-	if sysconfigIndex < 0 {
-		t.Fatalf("System V config does not contain %q", sysconfig)
-	}
-	for _, setting := range settings {
-		settingIndex := strings.Index(defaultSystemVConfig, setting)
-		if settingIndex < 0 {
-			t.Errorf("System V config does not contain %q", setting)
-		} else if settingIndex < sysconfigIndex {
-			t.Errorf("System V setting %q is resolved before sysconfig", setting)
-		}
 	}
 }
 
@@ -747,7 +727,7 @@ func TestDisableInstalledWatcherPreservesLegacyRemoval(t *testing.T) {
 	}
 
 	watchedScript := filepath.Join(directory, "watched")
-	content := "#!/bin/sh\n# WATCHER_PIDFILE\n[ \"$1\" = unwatch ]\n"
+	content := "#!/bin/sh\n# daemon-util-watchdog\n[ \"$1\" = unwatch ]\n"
 	if err := os.WriteFile(watchedScript, []byte(content), 0755); err != nil {
 		t.Fatal(err)
 	}

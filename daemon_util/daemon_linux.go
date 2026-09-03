@@ -197,7 +197,7 @@ func disableInstalledWatcher(servicePath string) error {
 	if err != nil {
 		return err
 	}
-	if !strings.Contains(string(content), "WATCHER_PIDFILE") {
+	if !strings.Contains(string(content), "# daemon-util-watchdog") {
 		return nil
 	}
 	return exec.Command(servicePath, "unwatch").Run()

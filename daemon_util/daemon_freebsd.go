@@ -94,14 +94,20 @@ func (bsd *bsdRecord) checkRunning() (string, bool, error) {
 		return "", false, statusCommandError("FreeBSD rc.d", bsd.name, output, err)
 	}
 	if running {
-		reg := regexp.MustCompile("pid  ([0-9]+)")
-		data := reg.FindStringSubmatch(string(output))
-		if len(data) > 1 {
-			return "Service (pid  " + data[1] + ") is running...", true, nil
+		if pid := freeBSDStatusPID(string(output)); pid != "" {
+			return "Service (pid  " + pid + ") is running...", true, nil
 		}
 		return "Service is running...", true, nil
 	}
 	return "Service is stopped", false, nil
+}
+
+func freeBSDStatusPID(status string) string {
+	data := regexp.MustCompile(`pid[[:space:]]+([0-9]+)`).FindStringSubmatch(status)
+	if len(data) > 1 {
+		return data[1]
+	}
+	return ""
 }
 
 func freeBSDStatus(status string, exitCode int) (running, recognized bool) {
@@ -276,14 +282,30 @@ stop_timeout={{.StopTimeoutSeconds}}
 
 start_cmd="daemon_start"
 stop_cmd="daemon_stop"
+status_cmd="daemon_status"
 daemon_start()
 {
 	cd "$app_directory" || return 1
 	"$command" -R 30 -P "$pidfile" -p "$child_pidfile" -f "$app_command" {{.Args}}
 }
+daemon_supervisor_pid()
+{
+	/usr/bin/pgrep -L -F "$pidfile" 2>/dev/null
+}
+daemon_status()
+{
+	supervisor_pid=$(daemon_supervisor_pid)
+	if [ -n "$supervisor_pid" ]; then
+		echo "$name is running as pid $supervisor_pid."
+		return 0
+	fi
+	echo "$name is not running."
+	return 1
+}
 daemon_stop()
 {
-	supervisor_pid=$rc_pid
+	supervisor_pid=$(daemon_supervisor_pid)
+	[ -n "$supervisor_pid" ] || return 1
 	kill -TERM "$supervisor_pid" 2>/dev/null || return 1
 
 	elapsed=0

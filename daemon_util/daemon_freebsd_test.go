@@ -57,7 +57,7 @@ func TestFreeBSDTemplateConfiguresStopTimeout(t *testing.T) {
 	output := renderFreeBSDConfig(t, 45)
 	for _, setting := range []string{
 		"stop_timeout=45",
-		"supervisor_pid=$rc_pid",
+		`supervisor_pid=$(daemon_supervisor_pid)`,
 		`child_pid=$(check_pidfile "$child_pidfile" "$app_command")`,
 		`kill -TERM "$supervisor_pid"`,
 		`kill -KILL "$child_pid"`,
@@ -73,6 +73,20 @@ func TestFreeBSDTemplateConfiguresWorkingDirectory(t *testing.T) {
 	for _, setting := range []string{
 		"app_directory=" + shellQuote("/opt/worker's files"),
 		`cd "$app_directory" || return 1`,
+	} {
+		if !strings.Contains(output, setting) {
+			t.Fatalf("rendered template does not contain %q", setting)
+		}
+	}
+}
+
+func TestFreeBSDStatusChecksLockedSupervisorPIDFile(t *testing.T) {
+	output := renderFreeBSDConfig(t, 45)
+	for _, setting := range []string{
+		`status_cmd="daemon_status"`,
+		`/usr/bin/pgrep -L -F "$pidfile" 2>/dev/null`,
+		`supervisor_pid=$(daemon_supervisor_pid)`,
+		`if [ -n "$supervisor_pid" ]; then`,
 	} {
 		if !strings.Contains(output, setting) {
 			t.Fatalf("rendered template does not contain %q", setting)
@@ -116,10 +130,11 @@ func TestFreeBSDStatus(t *testing.T) {
 		name           string
 		status         string
 		exitCode       int
+		wantPID        string
 		wantRunning    bool
 		wantRecognized bool
 	}{
-		{name: "running", status: "worker is running as pid 42.", wantRunning: true, wantRecognized: true},
+		{name: "running", status: "worker is running as pid 42.", wantPID: "42", wantRunning: true, wantRecognized: true},
 		{name: "stopped", status: "worker is not running.", exitCode: 1, wantRecognized: true},
 		{name: "command failure", status: "service: not found", exitCode: 1},
 	}
@@ -129,6 +144,9 @@ func TestFreeBSDStatus(t *testing.T) {
 			running, recognized := freeBSDStatus(test.status, test.exitCode)
 			if running != test.wantRunning || recognized != test.wantRecognized {
 				t.Fatalf("freeBSDStatus() = (%v, %v), want (%v, %v)", running, recognized, test.wantRunning, test.wantRecognized)
+			}
+			if pid := freeBSDStatusPID(test.status); pid != test.wantPID {
+				t.Fatalf("freeBSDStatusPID() = %q, want %q", pid, test.wantPID)
 			}
 		})
 	}

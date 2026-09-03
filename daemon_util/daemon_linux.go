@@ -193,13 +193,6 @@ func buildrootStyleInitDetected(root string) bool {
 }
 
 func disableInstalledWatcher(servicePath string) error {
-	content, err := os.ReadFile(servicePath)
-	if err != nil {
-		return err
-	}
-	if !strings.Contains(string(content), "# daemon-util-watchdog") {
-		return nil
-	}
 	return exec.Command(servicePath, "unwatch").Run()
 }
 

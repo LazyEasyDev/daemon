@@ -134,12 +134,6 @@ func (linux *buildrootRecord) Start() (string, error) {
 		return startAction + failed, ErrNotInstalled
 	}
 
-	if _, running, err := linux.checkRunning(); err != nil {
-		return startAction + failed, err
-	} else if running {
-		return startAction + failed, ErrAlreadyRunning
-	}
-
 	srvPath := linux.servicePath()
 	if err := exec.Command(srvPath, "start").Run(); err != nil {
 		return startAction + failed, err
@@ -191,18 +185,13 @@ func (linux *buildrootRecord) Status() (string, error) {
 
 const defaultBuildrootConfig = `#!/bin/sh
 
-# daemon-util-watchdog
-
 NAME={{shellQuote .Name}}
 DAEMON={{shellQuote .Path}}
 WORKING_DIRECTORY={{shellQuote .WorkingDirectory}}
-PIDFILE=${PIDFILE:-/var/run/$NAME.pid}
-STOP_TIMEOUT={{.StopTimeoutSeconds}}
-
-[ -r "/etc/default/$NAME" ] && . "/etc/default/$NAME" "$1"
-
+PIDFILE=/var/run/$NAME.pid
 INIT_SCRIPT=/etc/init.d/S90{{.Name}}
 WATCHER_PIDFILE=${PIDFILE%.pid}.watchdog.pid
+STOP_TIMEOUT={{.StopTimeoutSeconds}}
 
 read_pid() {
 	[ -r "$PIDFILE" ] || return 1
@@ -328,7 +317,7 @@ is_pid_running() {
 	read_pid && start-stop-daemon -K -t -q -p "$PIDFILE"
 }
 
-start_from_watch() {
+start_app() {
 	echo -n "Starting $NAME: "
 	if ! cd "$WORKING_DIRECTORY"; then
 		echo "FAIL"
@@ -359,8 +348,9 @@ start_from_watch() {
 
 start() {
 	if ! is_running; then
-		start_from_watch || return $?
+		start_app || return $?
 	fi
+	[ "$1" = "watched" ] && return 0
 	if ! start_watcher; then
 		echo "Warning: $NAME watcher could not start" >&2
 	fi
@@ -437,11 +427,7 @@ do_status() {
 
 case "$1" in
 	start)
-		if [ "$2" = "watched" ]; then
-			is_running || start_from_watch
-		else
-			start
-		fi
+		start "$2"
 		;;
 	stop)
 		stop

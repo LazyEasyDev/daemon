@@ -156,12 +156,6 @@ func (linux *systemVRecord) Start() (string, error) {
 		return startAction + failed, ErrNotInstalled
 	}
 
-	if _, running, err := linux.checkRunning(); err != nil {
-		return startAction + failed, err
-	} else if running {
-		return startAction + failed, ErrAlreadyRunning
-	}
-
 	if err := exec.Command("service", linux.name, "start").Run(); err != nil {
 		return startAction + failed, err
 	}
@@ -245,7 +239,6 @@ func existingSystemVServiceLinks(root, name string) ([]string, bool) {
 }
 
 const defaultSystemVConfig = `#! /bin/sh
-# daemon-util-watchdog
 #
 #       /etc/rc.d/init.d/{{.Name}}
 #
@@ -270,15 +263,12 @@ working_directory={{shellQuote .WorkingDirectory}}
 
 proc="{{.Name}}"
 pidfile="/var/run/$proc.pid"
+init_script=/etc/init.d/{{.Name}}
+watcher_pidfile=${pidfile%.pid}.watchdog.pid
 lockfile="/var/lock/subsys/$proc"
 stop_timeout={{.StopTimeoutSeconds}}
 
 [ -d "$(dirname "$lockfile")" ] || mkdir -p "$(dirname "$lockfile")"
-
-[ -e /etc/sysconfig/$proc ] && . /etc/sysconfig/$proc
-
-init_script=/etc/init.d/{{.Name}}
-watcher_pidfile=${pidfile%.pid}.watchdog.pid
 
 read_pid() {
 	[ -r "$pidfile" ] || return 1
@@ -304,8 +294,7 @@ is_expected_process() {
 }
 
 is_process_group_running() {
-	read_pid || return 1
-	kill -0 -- "-$pid" 2>/dev/null
+	kill -0 -- "-$target_pid" 2>/dev/null
 }
 
 is_watcher_process() {
@@ -406,7 +395,7 @@ disable_watcher() {
 	return 0
 }
 
-start_from_watch() {
+start_app() {
 	[ -x "$exec" ] || exit 5
 	command -v setsid >/dev/null 2>&1 || exit 5
 	cd "$working_directory" || exit 5
@@ -427,7 +416,14 @@ start_from_watch() {
 		printf 'Starting %s:\t' "$servname"
 		setsid "$exec" {{.Args}} >/dev/null 2>&1 &
 		pid=$!
-		printf '%s\n' "$pid" > "$pidfile"
+		if ! printf '%s\n' "$pid" > "$pidfile"; then
+			kill -TERM -- "-$pid" 2>/dev/null
+			sleep 1
+			kill -KILL -- "-$pid" 2>/dev/null
+			wait "$pid" 2>/dev/null
+			echo "FAIL"
+			return 1
+		fi
 		sleep 1
 		if is_expected_process; then
 			touch "$lockfile"
@@ -450,8 +446,9 @@ start_from_watch() {
 
 start() {
 	if ! is_expected_process; then
-		start_from_watch || return $?
+		start_app || return $?
 	fi
+	[ "$1" = "watched" ] && return 0
 	if ! start_watcher; then
 		printf 'Warning: %s watcher could not start\n' "$proc" >&2
 	fi
@@ -478,7 +475,8 @@ stop() {
 		echo "FAIL"
 		return 1
 	fi
-	if ! kill -TERM -- "-$pid" 2>/dev/null; then
+	target_pid=$pid
+	if ! kill -TERM -- "-$target_pid" 2>/dev/null; then
 		echo "FAIL"
 		return 1
 	fi
@@ -488,7 +486,7 @@ stop() {
 		sleep 1
 		elapsed=$((elapsed + 1))
 	done
-	if is_process_group_running && ! kill -KILL -- "-$pid" 2>/dev/null; then
+	if is_process_group_running && ! kill -KILL -- "-$target_pid" 2>/dev/null; then
 		echo "FAIL"
 		return 1
 	fi
@@ -526,11 +524,7 @@ service_status() {
 
 case "$1" in
 	start)
-		if [ "$2" = "watched" ]; then
-			is_expected_process || start_from_watch
-		else
-			start
-		fi
+		start "$2"
 		;;
 	stop)
 		stop

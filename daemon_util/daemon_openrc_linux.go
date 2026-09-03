@@ -36,6 +36,10 @@ func (linux *openRCRecord) isInstalled() bool {
 	return err == nil
 }
 
+func (linux *openRCRecord) runlevelCommand(action string) *exec.Cmd {
+	return exec.Command("rc-update", action, linux.name, "default")
+}
+
 type openRCServiceState uint8
 
 const (
@@ -142,7 +146,7 @@ func (linux *openRCRecord) Install(args ...string) (string, error) {
 		return installAction + failed, err
 	}
 
-	if err := exec.Command("rc-update", "add", linux.name, "default").Run(); err != nil {
+	if err := linux.runlevelCommand("add").Run(); err != nil {
 		if removeErr := os.Remove(servicePath); removeErr != nil {
 			return installAction + failed, errors.Join(err, removeErr)
 		}
@@ -161,7 +165,7 @@ func (linux *openRCRecord) Remove() (string, error) {
 	if !linux.isInstalled() {
 		return removeAction + failed, ErrNotInstalled
 	}
-	if err := exec.Command("rc-update", "--all", "delete", linux.name).Run(); err != nil {
+	if err := linux.runlevelCommand("delete").Run(); err != nil {
 		return removeAction + failed, err
 	}
 	if err := os.Remove(linux.servicePath()); err != nil {

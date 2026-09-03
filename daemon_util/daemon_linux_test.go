@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"text/template"
@@ -231,6 +232,17 @@ func TestOpenRCRespawnsWithoutRetryLimit(t *testing.T) {
 	}
 	if strings.Contains(defaultOpenRCConfig, "command_background=yes") {
 		t.Fatal("OpenRC config must leave the application in the foreground")
+	}
+}
+
+func TestOpenRCRunlevelCommandsTargetDefault(t *testing.T) {
+	service := &openRCRecord{name: "worker"}
+	for _, action := range []string{"add", "delete"} {
+		got := service.runlevelCommand(action).Args
+		want := []string{"rc-update", action, "worker", "default"}
+		if !slices.Equal(got, want) {
+			t.Errorf("runlevelCommand(%q).Args = %q, want %q", action, got, want)
+		}
 	}
 }
 

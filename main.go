@@ -18,6 +18,13 @@ func stopTimeoutFlag() cli.Flag {
 	}
 }
 
+func ignoreWarningsFlag() cli.Flag {
+	return &cli.BoolFlag{
+		Name:  "ignore-warnings",
+		Usage: "skip installation warnings and confirmation prompts",
+	}
+}
+
 func newCommand() *cli.Command {
 	stopAfterInstallTarget := 2
 	commands := []*cli.Command{
@@ -26,7 +33,7 @@ func newCommand() *cli.Command {
 			Usage:        "install app as system service",
 			ArgsUsage:    "<service-name> <app-or-absolute-path> [app arguments...]",
 			StopOnNthArg: &stopAfterInstallTarget,
-			Flags:        []cli.Flag{stopTimeoutFlag()},
+			Flags:        []cli.Flag{stopTimeoutFlag(), ignoreWarningsFlag()},
 			Action:       install,
 		},
 		{

@@ -125,6 +125,18 @@ Service names must:
 
 ## Install options
 
+### Warning confirmation
+
+When daemon-util detects a potentially unsafe installation, it displays the
+warning and asks for confirmation in an interactive terminal. Noninteractive
+installation stops instead of waiting for input. To skip installation warnings
+and their confirmation prompts, place `--ignore-warnings` before the service
+name:
+
+```sh
+./daemon install --ignore-warnings myservice myapp
+```
+
 ### Stop timeout
 
 Set the maximum graceful shutdown time during installation:

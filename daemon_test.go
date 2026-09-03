@@ -7,6 +7,44 @@ import (
 	"time"
 )
 
+func TestConfirmInstallWarning(t *testing.T) {
+	tests := []struct {
+		name           string
+		input          string
+		ignoreWarnings bool
+		interactive    bool
+		wantErr        string
+		wantOutput     string
+	}{
+		{name: "yes", input: "yes\n", interactive: true, wantOutput: "Warning: risky deployment\nContinue installation? [y/N] "},
+		{name: "short yes", input: "Y\n", interactive: true, wantOutput: "Warning: risky deployment\nContinue installation? [y/N] "},
+		{name: "no", input: "no\n", interactive: true, wantErr: "installation cancelled"},
+		{name: "default no", input: "\n", interactive: true, wantErr: "installation cancelled"},
+		{name: "end of input", interactive: true, wantErr: "installation cancelled"},
+		{name: "noninteractive", wantErr: "requires a terminal"},
+		{name: "ignored", ignoreWarnings: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			err := confirmInstallWarning(strings.NewReader(test.input), &output, "Warning: risky deployment", test.ignoreWarnings, test.interactive)
+			if test.wantErr == "" && err != nil {
+				t.Fatalf("confirmInstallWarning() error = %v", err)
+			}
+			if test.wantErr != "" && (err == nil || !strings.Contains(err.Error(), test.wantErr)) {
+				t.Fatalf("confirmInstallWarning() error = %v, want error containing %q", err, test.wantErr)
+			}
+			if test.wantOutput != "" && output.String() != test.wantOutput {
+				t.Fatalf("output = %q, want %q", output.String(), test.wantOutput)
+			}
+			if test.ignoreWarnings && output.Len() != 0 {
+				t.Fatalf("ignored warning output = %q, want empty", output.String())
+			}
+		})
+	}
+}
+
 type notifyingBuffer struct {
 	bytes.Buffer
 	written chan struct{}

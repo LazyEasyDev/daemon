@@ -97,6 +97,28 @@ func TestInstallCommandParsesStopTimeoutBeforeApplication(t *testing.T) {
 	}
 }
 
+func TestInstallCommandParsesIgnoreWarnings(t *testing.T) {
+	app := newCommand()
+	installCommand := app.Command("install")
+	if installCommand == nil {
+		t.Fatal("install command not found")
+	}
+
+	var ignoreWarnings bool
+	installCommand.Action = func(_ context.Context, command *cli.Command) error {
+		ignoreWarnings = command.Bool("ignore-warnings")
+		return nil
+	}
+
+	args := []string{"daemon-util", "install", "--ignore-warnings", "worker", "myapp"}
+	if err := app.Run(context.Background(), args); err != nil {
+		t.Fatal(err)
+	}
+	if !ignoreWarnings {
+		t.Fatal("--ignore-warnings was not enabled")
+	}
+}
+
 func TestInstallCommandRejectsZeroStopTimeout(t *testing.T) {
 	app := newCommand()
 	installCommand := app.Command("install")

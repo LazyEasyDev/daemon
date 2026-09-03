@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -57,6 +58,34 @@ func executablePathFromTarget(target string) (string, error) {
 		path = filepath.Join(filepath.Dir(executable), path)
 	}
 	return daemon_util.ResolveExecutablePath(path)
+}
+
+func confirmInstallWarning(input io.Reader, output io.Writer, warning string, ignoreWarnings, interactive bool) error {
+	if ignoreWarnings {
+		return nil
+	}
+	if _, err := fmt.Fprintln(output, warning); err != nil {
+		return err
+	}
+	if !interactive {
+		return errors.New("installation stopped because warning confirmation requires a terminal; rerun with --ignore-warnings to continue")
+	}
+	if _, err := fmt.Fprint(output, "Continue installation? [y/N] "); err != nil {
+		return err
+	}
+
+	scanner := bufio.NewScanner(input)
+	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			return fmt.Errorf("read warning confirmation: %w", err)
+		}
+		return errors.New("installation cancelled")
+	}
+	response := strings.ToLower(strings.TrimSpace(scanner.Text()))
+	if response != "y" && response != "yes" {
+		return errors.New("installation cancelled")
+	}
+	return nil
 }
 
 func install(_ context.Context, command *cli.Command) error {

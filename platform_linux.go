@@ -16,11 +16,11 @@ import (
 
 func configuredInstallService(command *cli.Command, serviceName, executablePath string) (daemon_util.Daemon, []string, error) {
 	service, err := configuredService(command, serviceName, executablePath)
-	if err == nil {
+	if err == nil && !command.Bool("ignore-warnings") {
 		if warning := selinuxInstallWarning(executablePath, "/sys/fs/selinux/enforce", readSELinuxFileContext); warning != "" {
 			interactive, terminalErr := installWarningTerminal(os.Stdin, os.Stderr)
 			if terminalErr == nil {
-				err = confirmInstallWarning(os.Stdin, os.Stderr, warning, command.Bool("ignore-warnings"), interactive)
+				err = confirmInstallWarning(os.Stdin, os.Stderr, warning, false, interactive)
 			}
 		}
 	}
@@ -36,21 +36,27 @@ func selinuxInstallWarning(executablePath, enforcePath string, readFileContext f
 	context, contextErr := readFileContext(executablePath)
 	context = strings.TrimRight(context, "\x00")
 	contextType := ""
+	validContext := false
 	if contextErr == nil {
-		fields := strings.Split(context, ":")
-		if len(fields) >= 3 {
-			contextType = fields[2]
-		}
+		contextType, validContext = selinuxContextType(context)
 	}
 	if !riskySELinuxExecutableType(contextType) && !riskySELinuxExecutablePath(executablePath) {
 		return ""
 	}
 
 	contextDescription := ""
-	if context != "" {
+	if validContext {
 		contextDescription = fmt.Sprintf(" (context %q)", context)
 	}
 	return fmt.Sprintf("Warning: SELinux is enforcing and may prevent the system service from executing %q%s; consider deploying the application bundle under a root-owned path such as /opt/<application> and configure a persistent SELinux file context for the executable. Moving files alone may preserve the current label.", executablePath, contextDescription)
+}
+
+func selinuxContextType(context string) (string, bool) {
+	fields := strings.SplitN(context, ":", 4)
+	if len(fields) < 3 || fields[0] == "" || fields[1] == "" || fields[2] == "" {
+		return "", false
+	}
+	return fields[2], true
 }
 
 func riskySELinuxExecutableType(contextType string) bool {
@@ -63,7 +69,7 @@ func riskySELinuxExecutableType(contextType string) bool {
 }
 
 func riskySELinuxExecutablePath(path string) bool {
-	for _, root := range []string{"/home", "/root", "/tmp", "/var/tmp", "/run", "/dev/shm"} {
+	for _, root := range []string{"/home", "/var/home", "/root", "/tmp", "/var/tmp", "/run", "/dev/shm"} {
 		relative, err := filepath.Rel(root, filepath.Clean(path))
 		if err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
 			return true

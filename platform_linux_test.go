@@ -46,6 +46,7 @@ func TestSELinuxInstallWarningCoversRiskyTypesAndPaths(t *testing.T) {
 		{name: "network filesystem type", path: "/srv/app", context: "system_u:object_r:nfs_t:s0"},
 		{name: "content type", path: "/srv/app", context: "system_u:object_r:httpd_sys_content_t:s0"},
 		{name: "home path", path: "/home/user/app", context: "system_u:object_r:myapp_exec_t:s0"},
+		{name: "alternate home path", path: "/var/home/user/app", context: "system_u:object_r:myapp_exec_t:s0"},
 		{name: "root home path", path: "/root/app", context: "system_u:object_r:myapp_exec_t:s0"},
 		{name: "temporary path", path: "/var/tmp/app", context: "system_u:object_r:myapp_exec_t:s0"},
 		{name: "runtime path", path: "/run/app", context: "system_u:object_r:myapp_exec_t:s0"},
@@ -79,6 +80,7 @@ func TestSELinuxInstallWarningSkipsUncertainOrAllowedCases(t *testing.T) {
 		{name: "generic executable label", path: "/opt/app/bin/app", enforce: "1\n", context: "system_u:object_r:bin_t:s0"},
 		{name: "custom executable label", path: "/opt/app/bin/app", enforce: "1\n", context: "system_u:object_r:myapp_exec_t:s0"},
 		{name: "unknown context", path: "/usr/local/bin/app", enforce: "1\n", contextErr: errors.New("context unavailable")},
+		{name: "malformed context", path: "/usr/local/bin/app", enforce: "1\n", context: "system_u::usr_t:s0"},
 		{name: "similar path prefix", path: "/home2/user/app", enforce: "1\n", context: "system_u:object_r:myapp_exec_t:s0"},
 		{name: "SELinux unavailable", path: "/home/user/app", missingFile: true, context: "unconfined_u:object_r:user_home_t:s0"},
 	}

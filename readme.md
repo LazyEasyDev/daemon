@@ -137,6 +137,10 @@ name:
 ./daemon install --ignore-warnings myservice myapp
 ```
 
+On Linux, the current warning detects common risky paths and SELinux file
+contexts while SELinux is enforcing. This is an advisory heuristic; custom
+SELinux policy can permit or deny executable types differently.
+
 ### Stop timeout
 
 Set the maximum graceful shutdown time during installation:

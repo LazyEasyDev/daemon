@@ -20,6 +20,18 @@ func (failingWriter) Write([]byte) (int, error) {
 	return 0, errors.New("write failed")
 }
 
+type promptFailingWriter struct {
+	writes int
+}
+
+func (writer *promptFailingWriter) Write(data []byte) (int, error) {
+	writer.writes++
+	if writer.writes == 2 {
+		return 0, errors.New("prompt write failed")
+	}
+	return len(data), nil
+}
+
 func TestConfirmInstallWarning(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -61,6 +73,10 @@ func TestConfirmInstallWarning(t *testing.T) {
 func TestConfirmInstallWarningFailuresDoNotBlockInstallation(t *testing.T) {
 	if err := confirmInstallWarning(strings.NewReader("yes\n"), failingWriter{}, "Warning: risky deployment", false, true); err != nil {
 		t.Fatalf("warning output failure blocked installation: %v", err)
+	}
+	promptOutput := &promptFailingWriter{}
+	if err := confirmInstallWarning(strings.NewReader("yes\n"), promptOutput, "Warning: risky deployment", false, true); err != nil {
+		t.Fatalf("prompt output failure blocked installation: %v", err)
 	}
 
 	var output bytes.Buffer

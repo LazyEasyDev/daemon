@@ -23,8 +23,28 @@ The OpenRC lane performs the same application-level lifecycle checks and also
 verifies its generated `openrc-run` script, `supervise-daemon` configuration,
 default-runlevel registration, respawn behavior, and process-group cleanup.
 
-The tests use immutable Ubuntu and Alpine cloud images with temporary qcow2
-overlays. Base images are never modified.
+The Upstart lane boots Ubuntu 14.04 LTS with Upstart as PID 1 and verifies the
+generated job definition, boot auto-start, explicit restart, graceful stop,
+configured-failure respawn, hard-crash respawn, and complete removal.
+
+The Windows lane installs Windows Server 2019 Evaluation Server Core and
+verifies SCM registration, automatic startup, recovery actions, external HTTP
+behavior, configured-failure and hard-crash recovery, reboot persistence,
+stop/start behavior, metadata cleanup, and service removal.
+
+The FreeBSD lane verifies the rc.d backend, `/usr/sbin/daemon` supervision,
+supervisor and application PID files, boot enablement, restart behavior,
+graceful and forced shutdown, and removal.
+
+The OpenWrt lane verifies procd backend detection, generated `rc.common`
+scripts, boot enablement, respawn behavior, stop timeout handling, and removal.
+
+The Buildroot backend is currently covered by package tests and an image-matrix
+builder for generating multiple Buildroot variants from source. A dedicated
+Buildroot libvirt guest runner can consume these generated images.
+
+The tests use immutable Ubuntu, Alpine, FreeBSD, and OpenWrt images with
+disposable overlays or copies. Base images are never modified.
 
 ## Ubuntu host prerequisites
 
@@ -34,7 +54,7 @@ Install the packages appropriate for the host architecture:
 sudo apt update
 sudo apt install libvirt-daemon-system libvirt-clients virtinst \
   cloud-image-utils qemu-utils qemu-system-x86 qemu-system-arm \
-  qemu-efi-aarch64 wget openssh-client
+  qemu-efi-aarch64 genisoimage e2fsprogs util-linux wget openssh-client
 sudo usermod -aG libvirt,kvm "$USER"
 ```
 
@@ -106,6 +126,135 @@ The shared `VM_MEMORY_MIB`, `VM_VCPUS`, `VM_DISK_GIB`, `VM_BOOT_TIMEOUT`,
 `INTEGRATION_CACHE_DIR`, `INTEGRATION_ARTIFACT_DIR`, and `KEEP_VM` settings also
 apply. The OpenRC defaults are 1 GiB memory and a 4 GiB overlay.
 
+## Run the Upstart lane
+
+The Upstart lane targets the official Ubuntu 14.04.5 LTS ARM64 UEFI cloud image:
+
+```sh
+./integration_tests/upstart/run-libvirt.sh
+```
+
+Because modern AArch64 firmware may not boot this historical image reliably,
+the runner defaults to direct boot with the image's Ubuntu 4.4 kernel and
+initrd. It verifies the official image SHA-256 before creating a disposable
+overlay. Ubuntu 14.04 is end-of-life; the lane does not install guest packages
+or depend on archived package repositories.
+
+Upstart-specific settings are:
+
+| Environment variable | Default | Purpose |
+| --- | --- | --- |
+| `UPSTART_BOOT_MODE` | `direct` | Use `direct` kernel boot or optional `uefi` boot |
+| `UPSTART_BASE_IMAGE` | Cached official Trusty image | Existing qcow2 image |
+| `UPSTART_BASE_IMAGE_SHA256` | Published checksum | Optional pinned image checksum |
+| `UPSTART_IMAGE_URL` | Official Trusty release URL | Image download source |
+| `UPSTART_KERNEL_VERSION` | `4.4.0-148-generic` | Kernel and initrd version extracted for direct boot |
+| `UPSTART_KERNEL_IMAGE` | Cached extracted kernel | Existing direct-boot kernel |
+| `UPSTART_INITRD_IMAGE` | Cached extracted initrd | Existing direct-boot initrd |
+
+The shared VM, cache, artifact, and `KEEP_VM` settings listed above also apply.
+
+## Run the Windows Server lane
+
+The Windows lane targets the official Windows Server 2019 Evaluation ISO and
+runs without requiring a prebuilt Windows image:
+
+```sh
+./integration_tests/windows/run-qemu.sh
+```
+
+The first run downloads the 4.9 GiB Microsoft ISO, records its SHA-256, and
+performs one unattended Server Core installation. Later runs use a disposable
+qcow2 overlay backed by the cached clean base disk. The test communicates with
+the guest through WinRM and forwards the application's HTTP endpoint to the
+host for external assertions.
+
+Windows Server 2019 is x86-64-only. On an ARM64 host the runner extracts Ubuntu's
+`qemu-system-x86` and WinRM client packages into `/var/tmp` without sudo, then
+uses QEMU TCG cross-architecture emulation. Initial installation can take
+several hours; at least 12 GiB of free disk space is required. The evaluation
+image remains subject to Microsoft's licensing terms.
+
+Windows-specific settings are:
+
+| Environment variable | Default | Purpose |
+| --- | --- | --- |
+| `WINDOWS_ISO` | Cached official Server 2019 ISO | Existing installation ISO |
+| `WINDOWS_ISO_URL` | Official Microsoft evaluation URL | ISO download source |
+| `WINDOWS_ISO_SHA256` | Pinned official-image checksum | Override checksum for a supplied ISO |
+| `WINDOWS_BASE_IMAGE` | Cached Server Core qcow2 | Existing prepared base image |
+| `WINDOWS_ADMIN_USER` | `Administrator` | Disposable guest administrator |
+| `WINDOWS_ADMIN_PASSWORD` | `DaemonTest!2026` | Disposable guest password |
+| `WINDOWS_WINRM_PORT` | `55985` | Host port forwarded to guest WinRM |
+| `WINDOWS_APP_HOST_PORT` | `58080` | Host port forwarded to the test application |
+| `WINDOWS_PAYLOAD_PORT` | `58081` | Temporary host payload server port |
+| `WINDOWS_VNC_DISPLAY` | `7` | Local-only VNC display used for diagnostics |
+| `VM_INSTALL_TIMEOUT` | `14400` | First installation timeout in seconds |
+
+The shared cache, artifact, memory, CPU, disk, boot-timeout, and `KEEP_VM`
+settings also apply. The defaults are 2.5 GiB memory, two vCPUs, and a sparse
+40 GiB virtual disk.
+
+## Run the FreeBSD lane
+
+The FreeBSD lane uses the official ARM64 BASIC-CLOUDINIT UFS image:
+
+```sh
+./integration_tests/freebsd/run-libvirt.sh
+```
+
+The default is FreeBSD 14.4-RELEASE. The compressed image is verified against
+the release SHA-256 manifest before it is decompressed and cached. No packages
+are installed in the guest; the test driver uses FreeBSD base-system tools. The
+image's automatic first-boot base and package updates are disabled through
+nuageinit's early config-2 file provisioning, before networking and the update
+services. The same provisioning configures temporary key-only root SSH for the
+disposable guest.
+
+FreeBSD-specific image settings are:
+
+| Environment variable | Default | Purpose |
+| --- | --- | --- |
+| `FREEBSD_RELEASE` | `14.4-RELEASE` | FreeBSD VM-image release |
+| `FREEBSD_BASE_IMAGE` | Cached decompressed image | Existing FreeBSD qcow2 image |
+| `FREEBSD_BASE_IMAGE_SHA256` | None | Optional checksum for a supplied base image |
+| `FREEBSD_COMPRESSED_IMAGE` | Cached official archive | Existing compressed image |
+| `FREEBSD_IMAGE_URL` | Official release URL | Compressed-image download source |
+| `FREEBSD_IMAGE_SHA256` | Release manifest value | Optional pinned archive checksum |
+
+The shared VM and artifact settings listed above also apply. The FreeBSD
+defaults are 2 GiB memory and an 8 GiB overlay.
+
+## Run the OpenWrt lane
+
+The OpenWrt lane uses the official ARM64 ext4 combined EFI image:
+
+```sh
+./integration_tests/openwrt/run-libvirt.sh
+```
+
+The default is OpenWrt 25.12.5. The runner verifies the published SHA-256,
+copies the raw image for each run, and injects an ephemeral Dropbear key and a
+first-boot UCI script with unprivileged ext4 tools. The UCI script changes the
+LAN interface to DHCP and disables its DHCP server so the guest can safely join
+the existing libvirt network.
+
+OpenWrt-specific image settings are:
+
+| Environment variable | Default | Purpose |
+| --- | --- | --- |
+| `OPENWRT_VERSION` | `25.12.5` | OpenWrt image release |
+| `OPENWRT_BASE_IMAGE` | Cached decompressed image | Existing raw OpenWrt image |
+| `OPENWRT_BASE_IMAGE_SHA256` | None | Optional checksum for a supplied base image |
+| `OPENWRT_COMPRESSED_IMAGE` | Cached official archive | Existing compressed image |
+| `OPENWRT_IMAGE_URL` | Official release URL | Compressed-image download source |
+| `OPENWRT_IMAGE_SHA256` | Published checksum | Optional pinned archive checksum |
+
+The shared VM and artifact settings also apply. The OpenWrt default is 512 MiB
+of memory. OpenWrt mounts `/var` as volatile storage, so informational `APP` and
+`ARGS` list metadata is expected to disappear after reboot; the persistent
+procd service definition remains authoritative.
+
 ### Configuration
 
 | Environment variable | Default | Purpose |
@@ -148,7 +297,8 @@ KEEP_VM=1 ./integration_tests/systemd/run-libvirt.sh
 Each run creates a timestamped artifact directory containing the libvirt domain
 XML and available guest diagnostics. Guest diagnostics include:
 
-- generated systemd unit or OpenRC service script;
+- generated systemd unit, OpenRC service script, FreeBSD rc.d script, or
+  OpenWrt procd script;
 - native service-manager status and registration output;
 - journal entries where available;
 - process list;
@@ -159,6 +309,41 @@ The VM is removed even when a test fails unless `KEEP_VM=1` is set.
 
 During software-emulated boots, the runner prints DHCP, SSH, and reboot progress
 every 15 seconds. These waits are expected to take longer than they do with KVM.
+
+## Build multiple Buildroot variants
+
+To simulate different real-world Buildroot configurations, build a profile
+matrix from source:
+
+```sh
+./integration_tests/buildroot/build-matrix.sh
+```
+
+Default profiles are `baseline,debug,release` using
+`qemu_aarch64_virt_defconfig` plus profile fragments in
+`integration_tests/buildroot/fragments`.
+
+Useful overrides:
+
+| Environment variable | Default | Purpose |
+| --- | --- | --- |
+| `BUILDROOT_REF` | `2026.02.3` | Buildroot git tag/branch to clone |
+| `BUILDROOT_DIR` | `.cache/buildroot-<ref>` | Existing Buildroot source tree |
+| `BUILDROOT_OUTPUT_ROOT` | `/var/tmp/daemon-buildroot-matrix` | Per-profile output root |
+| `BUILDROOT_PROFILES` | `baseline,debug,release` | Comma-separated profile list |
+| `JOBS` | Host CPU count | Parallel build jobs |
+
+Example building two profiles only:
+
+```sh
+BUILDROOT_PROFILES=baseline,release JOBS=8 ./integration_tests/buildroot/build-matrix.sh
+```
+
+The builder writes a manifest at:
+
+- `BUILDROOT_OUTPUT_ROOT/manifest.tsv`
+
+Each row contains the generated kernel and rootfs image paths for one profile.
 
 ## Safety
 

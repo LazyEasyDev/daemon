@@ -1,0 +1,4 @@
+# Ensure libvirt's default PCI-attached virtio devices are supported on aarch64.
+CONFIG_PCI=y
+CONFIG_PCI_HOST_GENERIC=y
+CONFIG_VIRTIO_PCI=y

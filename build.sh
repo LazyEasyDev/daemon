@@ -16,12 +16,14 @@ build_target() {
 	output_arch=${3:-$target_arch}
 	extension=${4:-}
 	target_arm=${5:-}
+	target_mips=${6:-}
 	output="$build_dir/daemon-$target_os-$output_arch$extension"
 
 	printf 'Compiling %s/%s\n' "$target_os" "$target_arch"
 	(
 		cd "$script_dir"
-		CGO_ENABLED=0 GOOS="$target_os" GOARCH="$target_arch" GOARM="$target_arm" \
+		CGO_ENABLED=0 GOOS="$target_os" GOARCH="$target_arch" \
+			GOARM="$target_arm" GOMIPS="$target_mips" \
 			go build -trimpath -o "$output" .
 	)
 }
@@ -34,6 +36,8 @@ build_target linux amd64
 build_target linux 386
 build_target linux arm64
 build_target linux arm arm32 "" 6
+build_target linux mips mips "" "" softfloat
+build_target linux mipsle mipsle "" "" softfloat
 build_target windows amd64 amd64 .exe
 build_target windows 386 386 .exe
 build_target windows arm64 arm64 .exe

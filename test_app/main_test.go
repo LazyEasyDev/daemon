@@ -22,13 +22,36 @@ func TestParseConfig(t *testing.T) {
 		"--file-path", "relative-path-test.txt",
 		"--stop-after", "30s",
 		"--stop_delay", "45s",
+		"--event-path", "events.jsonl",
+		"--spawn-child=true",
+		"--child-pid-path", "child.pid",
 	}
 	cfg, err := parseConfig(args)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.Enabled || cfg.Message != "hello service" || cfg.Count != 7 || cfg.Port != 18081 || cfg.FilePath != "relative-path-test.txt" || cfg.StopAfter != 30*time.Second || cfg.StopDelay != 45*time.Second {
+	if !cfg.Enabled || cfg.Message != "hello service" || cfg.Count != 7 || cfg.Port != 18081 || cfg.FilePath != "relative-path-test.txt" || cfg.StopAfter != 30*time.Second || cfg.StopDelay != 45*time.Second || cfg.EventPath != "events.jsonl" || !cfg.SpawnChild || cfg.ChildPIDPath != "child.pid" {
 		t.Fatalf("parsed config = %+v", cfg)
+	}
+}
+
+func TestRecordLifecycleEvent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	app := newApplication(config{Port: 18080, EventPath: path}, nil, "/opt/test-app", "")
+	if err := app.recordEvent("started"); err != nil {
+		t.Fatal(err)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var event lifecycleEvent
+	if err := json.Unmarshal(content, &event); err != nil {
+		t.Fatal(err)
+	}
+	if event.Event != "started" || event.PID != os.Getpid() || event.Time.IsZero() {
+		t.Fatalf("event = %+v", event)
 	}
 }
 

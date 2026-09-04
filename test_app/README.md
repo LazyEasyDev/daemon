@@ -13,12 +13,21 @@ This configurable HTTP server verifies that `daemon` preserves application argum
 | `--file-path` | String | Empty (disabled) |
 | `--stop-after` | Duration | `0` (disabled) |
 | `--stop_delay` | Duration | `0` (disabled) |
+| `--event-path` | String | Empty (disabled) |
+| `--spawn-child` | Boolean | `false` |
+| `--child-pid-path` | String | `child.pid` |
 
 Use `--enabled=true` or `--enabled=false` for the Boolean option. Quote string values that contain spaces. Durations use Go syntax, such as `30s`, `2m`, or `1m30s`.
 
 When `--file-path` is set, the application reads the file during startup and
 returns its contents as `file_content` from the root endpoint. A missing or
 unreadable file causes startup to fail.
+
+When `--event-path` is set, the application appends JSON Lines records for
+startup, received stop signals, graceful completion, and configured failures.
+Use `--spawn-child=true` to create a long-running child process and write its
+process ID to `--child-pid-path`. These options are intended for service-manager
+integration tests that verify graceful shutdown and descendant cleanup.
 
 ## Verify a relative file path
 

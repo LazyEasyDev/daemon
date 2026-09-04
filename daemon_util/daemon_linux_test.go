@@ -225,6 +225,8 @@ func TestOpenRCRespawnsWithoutRetryLimit(t *testing.T) {
 		"stopgroup=true",
 		"respawn_delay=30",
 		"respawn_max=0",
+		"daemon_stop_process_group=$(service_get_value child_pid)",
+		`kill -KILL -- "-$daemon_stop_process_group"`,
 	} {
 		if !strings.Contains(defaultOpenRCConfig, setting) {
 			t.Fatalf("OpenRC config does not contain %q", setting)
@@ -574,10 +576,14 @@ func TestSystemVStatusDoesNotRequireRedHatHelpers(t *testing.T) {
 		`status -p $pidfile $proc`,
 		"\tsuccess\n",
 		"\tfailure\n",
-		`$"`,
 	} {
 		if strings.Contains(defaultSystemVConfig, dependency) {
 			t.Fatalf("System V config still depends on %q", dependency)
+		}
+	}
+	for index := 0; index+1 < len(defaultSystemVConfig); index++ {
+		if defaultSystemVConfig[index:index+2] == `$"` && (index == 0 || defaultSystemVConfig[index-1] != '$') {
+			t.Fatal(`System V config still depends on localized $"..." strings`)
 		}
 	}
 }

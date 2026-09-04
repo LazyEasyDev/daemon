@@ -21,5 +21,8 @@ daemon
 # Generated cross-platform binaries
 /build/
 
+# Application-level integration test diagnostics
+/integration_tests/artifacts/
+
 # Dependency directories (remove the comment below to include it)
 # vendor/

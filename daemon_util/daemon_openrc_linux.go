@@ -251,4 +251,13 @@ depend() {
 	need localmount
 	after bootmisc
 }
+
+stop_pre() {
+	daemon_stop_process_group=$(service_get_value child_pid)
+}
+
+stop_post() {
+	[ -n "$daemon_stop_process_group" ] || return 0
+	kill -KILL -- "-$daemon_stop_process_group" 2>/dev/null || true
+}
 `

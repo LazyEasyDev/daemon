@@ -295,6 +295,11 @@ curl http://127.0.0.1:18080/healthz
 See [test_app/README.md](test_app/README.md) for argument, restart, and graceful
 shutdown test scenarios.
 
+Run the disposable QEMU/libvirt systemd and OpenRC application-level suites as
+documented in [integration_tests/README.md](integration_tests/README.md). They verify
+installation, boot persistence, restart behavior, stop-timeout escalation,
+process-tree cleanup, and removal in real Ubuntu and Alpine guests.
+
 ## Architecture
 
 ### Runtime model

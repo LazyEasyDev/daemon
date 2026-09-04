@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"sync"
@@ -19,16 +20,27 @@ import (
 )
 
 type config struct {
-	Enabled   bool          `json:"enabled"`
-	Message   string        `json:"message"`
-	Count     int           `json:"count"`
-	Port      int           `json:"port"`
-	FilePath  string        `json:"file_path"`
-	StopAfter time.Duration `json:"stop_after"`
-	StopDelay time.Duration `json:"stop_delay"`
+	Enabled      bool          `json:"enabled"`
+	Message      string        `json:"message"`
+	Count        int           `json:"count"`
+	Port         int           `json:"port"`
+	FilePath     string        `json:"file_path"`
+	StopAfter    time.Duration `json:"stop_after"`
+	StopDelay    time.Duration `json:"stop_delay"`
+	EventPath    string        `json:"event_path"`
+	SpawnChild   bool          `json:"spawn_child"`
+	ChildPIDPath string        `json:"child_pid_path"`
 }
 
 var errStopAfter = errors.New("configured stop-after elapsed")
+
+const childProcessArgument = "--daemon-test-child"
+
+type lifecycleEvent struct {
+	Event string    `json:"event"`
+	PID   int       `json:"pid"`
+	Time  time.Time `json:"time"`
+}
 
 type status struct {
 	Config      config    `json:"config"`
@@ -36,6 +48,7 @@ type status struct {
 	Executable  string    `json:"executable"`
 	FileContent string    `json:"file_content"`
 	PID         int       `json:"pid"`
+	ChildPID    int       `json:"child_pid,omitempty"`
 	StartedAt   time.Time `json:"started_at"`
 	CurrentTime time.Time `json:"current_time"`
 }
@@ -46,6 +59,7 @@ type application struct {
 	executable  string
 	fileContent string
 	startedAt   time.Time
+	childPID    int
 	server      *http.Server
 	serveErr    chan error
 	startMu     sync.Mutex
@@ -64,6 +78,9 @@ func parseConfig(args []string) (config, error) {
 	flags.StringVar(&cfg.FilePath, "file-path", "", "file to read during startup")
 	flags.DurationVar(&cfg.StopAfter, "stop-after", 0, "stop with a failure after this duration")
 	flags.DurationVar(&cfg.StopDelay, "stop_delay", 0, "delay graceful shutdown after a stop request")
+	flags.StringVar(&cfg.EventPath, "event-path", "", "append lifecycle events to this file")
+	flags.BoolVar(&cfg.SpawnChild, "spawn-child", false, "start a child process for cleanup testing")
+	flags.StringVar(&cfg.ChildPIDPath, "child-pid-path", "child.pid", "write the test child process ID to this file")
 	if err := flags.Parse(args); err != nil {
 		return config{}, err
 	}
@@ -124,6 +141,7 @@ func (app *application) handleStatus(writer http.ResponseWriter, _ *http.Request
 		Executable:  app.executable,
 		FileContent: app.fileContent,
 		PID:         os.Getpid(),
+		ChildPID:    app.childPID,
 		StartedAt:   app.startedAt,
 		CurrentTime: time.Now(),
 	}); err != nil {
@@ -147,11 +165,57 @@ func (app *application) start() error {
 	if err != nil {
 		return err
 	}
+	if err := app.recordEvent("started"); err != nil {
+		_ = listener.Close()
+		return err
+	}
+	if app.config.SpawnChild {
+		if err := app.startChild(); err != nil {
+			_ = listener.Close()
+			return err
+		}
+	}
 	app.started = true
 	go func() {
 		log.Printf("test app started at %s and is listening on http://127.0.0.1:%d", app.startedAt.Format(time.RFC3339Nano), app.config.Port)
 		if err := app.server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			app.serveErr <- err
+		}
+	}()
+	return nil
+}
+
+func (app *application) recordEvent(event string) error {
+	if app.config.EventPath == "" {
+		return nil
+	}
+	file, err := os.OpenFile(app.config.EventPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		return fmt.Errorf("open lifecycle event file: %w", err)
+	}
+	defer file.Close()
+	if err := json.NewEncoder(file).Encode(lifecycleEvent{Event: event, PID: os.Getpid(), Time: time.Now()}); err != nil {
+		return fmt.Errorf("write lifecycle event: %w", err)
+	}
+	return nil
+}
+
+func (app *application) startChild() error {
+	command := exec.Command(app.executable, childProcessArgument)
+	command.Stdout = os.Stdout
+	command.Stderr = os.Stderr
+	if err := command.Start(); err != nil {
+		return fmt.Errorf("start child process: %w", err)
+	}
+	app.childPID = command.Process.Pid
+	if err := os.WriteFile(app.config.ChildPIDPath, []byte(fmt.Sprintf("%d\n", app.childPID)), 0600); err != nil {
+		_ = command.Process.Kill()
+		_ = command.Wait()
+		return fmt.Errorf("write child process ID: %w", err)
+	}
+	go func() {
+		if err := command.Wait(); err != nil {
+			log.Printf("child process exited: %v", err)
 		}
 	}()
 	return nil
@@ -194,9 +258,18 @@ func (app *application) run() error {
 	select {
 	case received := <-interrupt:
 		log.Printf("received %s", received)
+		if err := app.recordEvent("signal"); err != nil {
+			log.Printf("record stop signal: %v", err)
+		}
 		app.Stop()
+		if err := app.recordEvent("stopped"); err != nil {
+			log.Printf("record graceful stop: %v", err)
+		}
 		return nil
 	case <-stopTimer:
+		if err := app.recordEvent("failure"); err != nil {
+			log.Printf("record configured failure: %v", err)
+		}
 		app.shutdown()
 		return fmt.Errorf("%w: %s", errStopAfter, app.config.StopAfter)
 	case err := <-app.serveErr:
@@ -206,6 +279,13 @@ func (app *application) run() error {
 
 func main() {
 	args := os.Args[1:]
+	if len(args) == 1 && args[0] == childProcessArgument {
+		interrupt := make(chan os.Signal, 1)
+		signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
+		defer signal.Stop(interrupt)
+		<-interrupt
+		return
+	}
 	cfg, err := parseConfig(args)
 	if err != nil {
 		log.Fatal(err)

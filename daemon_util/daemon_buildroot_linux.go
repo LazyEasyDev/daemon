@@ -154,12 +154,6 @@ func (linux *buildrootRecord) Stop() (string, error) {
 		return stopAction + failed, ErrNotInstalled
 	}
 
-	if _, running, err := linux.checkRunning(); err != nil {
-		return stopAction + failed, err
-	} else if !running {
-		return stopAction + failed, ErrAlreadyStopped
-	}
-
 	srvPath := linux.servicePath()
 	if err := exec.Command(srvPath, "stop").Run(); err != nil {
 		return stopAction + failed, err
@@ -416,11 +410,9 @@ do_status() {
 		return 0
 	fi
 	rm -f "$PIDFILE"
-	if read_watcher_pid && is_watcher_process; then
-		echo "$NAME is running (watcher pid $watcher_pid)"
-		return 0
+	if ! read_watcher_pid || ! is_watcher_process; then
+		rm -f "$WATCHER_PIDFILE"
 	fi
-	rm -f "$WATCHER_PIDFILE"
 	echo "$NAME is stopped"
 	return 3
 }

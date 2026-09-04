@@ -437,6 +437,7 @@ func TestLinuxWatcherTemplatesSuperviseApplications(t *testing.T) {
 			`if ! start_watcher; then`,
 			`Warning: $NAME watcher could not start`,
 			`if ! disable_watcher; then`,
+			"rm -f \"$PIDFILE\"\n\tif ! read_watcher_pid || ! is_watcher_process; then\n\t\trm -f \"$WATCHER_PIDFILE\"\n\tfi\n\techo \"$NAME is stopped\"\n\treturn 3",
 			"unwatch)\n\t\tdisable_watcher",
 		}},
 		{name: "System V", source: defaultSystemVConfig, wants: []string{
@@ -456,6 +457,7 @@ func TestLinuxWatcherTemplatesSuperviseApplications(t *testing.T) {
 			`if ! start_watcher; then`,
 			`Warning: %s watcher could not start`,
 			`if ! disable_watcher; then`,
+			"if ! read_watcher_pid || ! is_watcher_process; then\n\t\trm -f \"$watcher_pidfile\"\n\tfi\n\tprintf '%s is stopped\\n' \"$proc\"\n\treturn 3",
 			"unwatch)\n\t\tdisable_watcher",
 		}},
 	}
@@ -483,6 +485,9 @@ func TestLinuxWatcherTemplatesSuperviseApplications(t *testing.T) {
 				if strings.Contains(test.source, unwanted) {
 					t.Errorf("template still contains obsolete watcher directory logic %q", unwanted)
 				}
+			}
+			if strings.Contains(test.source, "is running (watcher pid") {
+				t.Error("template reports watcher-only state as running")
 			}
 		})
 	}

@@ -175,12 +175,6 @@ func (linux *systemVRecord) Stop() (string, error) {
 		return stopAction + failed, ErrNotInstalled
 	}
 
-	if _, running, err := linux.checkRunning(); err != nil {
-		return stopAction + failed, err
-	} else if !running {
-		return stopAction + failed, ErrAlreadyStopped
-	}
-
 	if err := exec.Command("service", linux.name, "stop").Run(); err != nil {
 		return stopAction + failed, err
 	}
@@ -513,11 +507,9 @@ service_status() {
 		printf '%s (pid  %s) is running...\n' "$proc" "$pid"
 		return 0
 	fi
-	if read_watcher_pid && is_watcher_process; then
-		printf '%s is running (watcher pid %s)...\n' "$proc" "$watcher_pid"
-		return 0
+	if ! read_watcher_pid || ! is_watcher_process; then
+		rm -f "$watcher_pidfile"
 	fi
-	rm -f "$watcher_pidfile"
 	printf '%s is stopped\n' "$proc"
 	return 3
 }

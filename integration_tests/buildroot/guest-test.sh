@@ -147,6 +147,16 @@ case "$phase" in
 			"$new_pid "*) ;;
 			*) fail 'new application identity was not recorded' ;;
 		esac
+		restart_pid=$new_pid
+		restart_started=$(date +%s)
+		"$service_path" restart
+		restart_elapsed=$(($(date +%s) - restart_started))
+		[ "$restart_elapsed" -lt 12 ] || fail "direct init-script restart retained a ${restart_elapsed}s delay"
+		wait_for_http
+		new_pid=$(http_pid)
+		[ "$new_pid" != "$restart_pid" ] || fail "direct init-script restart reused PID $restart_pid"
+		wait_process_gone "$restart_pid"
+		log "direct init-script restart completed in ${restart_elapsed}s and changed PID from $restart_pid to $new_pid"
 		"$install_dir/daemon" restart "$service_name"
 		wait_for_http
 		"$install_dir/daemon" stop "$service_name"

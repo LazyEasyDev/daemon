@@ -371,6 +371,20 @@ func TestUpstartRespawnsWithoutRetryLimit(t *testing.T) {
 	}
 }
 
+func TestUpstartCommandsUseInitctl(t *testing.T) {
+	record := &upstartRecord{name: "worker"}
+	for _, action := range []string{"status", "start", "stop"} {
+		command := record.command(action)
+		if command.Path != upstartCommandPath {
+			t.Errorf("%s command path = %q, want %q", action, command.Path, upstartCommandPath)
+		}
+		wantArgs := strings.Join([]string{upstartCommandPath, action, "worker"}, "\x00")
+		if gotArgs := strings.Join(command.Args, "\x00"); gotArgs != wantArgs {
+			t.Errorf("%s command args = %q, want %q", action, command.Args, []string{upstartCommandPath, action, "worker"})
+		}
+	}
+}
+
 func TestUpstartStatus(t *testing.T) {
 	tests := []struct {
 		status         string
@@ -837,19 +851,32 @@ func TestRunitDetected(t *testing.T) {
 		serviceRoot     bool
 		activeDirectory string
 		activeRuntime   bool
+		svPath          string
 		want            bool
 	}{
-		{name: "active service directory", serviceRoot: true, activeDirectory: "directory", activeRuntime: true, want: true},
-		{name: "active service symlink", serviceRoot: true, activeDirectory: "symlink", want: true},
-		{name: "missing service definitions", activeDirectory: "directory", activeRuntime: true},
-		{name: "missing active directory", serviceRoot: true},
-		{name: "missing active runtime", serviceRoot: true, activeDirectory: "directory"},
-		{name: "active path is a file", serviceRoot: true, activeDirectory: "file", activeRuntime: true},
+		{name: "active service directory", serviceRoot: true, activeDirectory: "directory", activeRuntime: true, svPath: "usr/bin/sv", want: true},
+		{name: "active service symlink", serviceRoot: true, activeDirectory: "symlink", svPath: "bin/sv", want: true},
+		{name: "missing service definitions", activeDirectory: "directory", activeRuntime: true, svPath: "usr/bin/sv"},
+		{name: "missing active directory", serviceRoot: true, svPath: "usr/bin/sv"},
+		{name: "missing active runtime", serviceRoot: true, activeDirectory: "directory", svPath: "usr/bin/sv"},
+		{name: "active path is a file", serviceRoot: true, activeDirectory: "file", activeRuntime: true, svPath: "usr/bin/sv"},
+		{name: "missing sv command", serviceRoot: true, activeDirectory: "directory", activeRuntime: true},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
+			t.Setenv("PATH", root)
+			if test.svPath != "" {
+				svPath := filepath.Join(root, test.svPath)
+				if err := os.MkdirAll(filepath.Dir(svPath), 0755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(svPath, nil, 0755); err != nil {
+					t.Fatal(err)
+				}
+				t.Setenv("PATH", filepath.Dir(svPath))
+			}
 			if test.serviceRoot {
 				if err := os.MkdirAll(filepath.Join(root, "etc/sv"), 0755); err != nil {
 					t.Fatal(err)
@@ -978,6 +1005,7 @@ func TestBuildrootStyleInitDetected(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
+			t.Setenv("PATH", root)
 			initDirectory := filepath.Join(root, "etc/init.d")
 			if err := os.MkdirAll(initDirectory, 0755); err != nil {
 				t.Fatal(err)
@@ -994,6 +1022,7 @@ func TestBuildrootStyleInitDetected(t *testing.T) {
 				if err := os.WriteFile(filepath.Join(helperDirectory, "start-stop-daemon"), nil, test.helperMode); err != nil {
 					t.Fatal(err)
 				}
+				t.Setenv("PATH", helperDirectory)
 			}
 
 			if got := buildrootStyleInitDetected(root); got != test.want {

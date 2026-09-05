@@ -197,19 +197,8 @@ func buildrootStyleInitDetected(root string) bool {
 		return false
 	}
 
-	for _, path := range []string{
-		"sbin/start-stop-daemon",
-		"usr/sbin/start-stop-daemon",
-		"bin/start-stop-daemon",
-		"usr/bin/start-stop-daemon",
-	} {
-		info, err := os.Stat(filepath.Join(root, path))
-		if err == nil && !info.IsDir() && info.Mode().Perm()&0111 != 0 {
-			return true
-		}
-	}
-
-	return false
+	_, err = exec.LookPath("start-stop-daemon")
+	return err == nil
 }
 
 func disableInstalledWatcher(servicePath string) error {

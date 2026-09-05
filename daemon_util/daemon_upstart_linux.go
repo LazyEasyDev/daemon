@@ -14,6 +14,8 @@ import (
 	"text/template"
 )
 
+const upstartCommandPath = "/sbin/initctl"
+
 // upstartRecord - standard record (struct) for linux upstart version of daemon package
 type upstartRecord struct {
 	serviceConfig
@@ -37,9 +39,13 @@ func (linux *upstartRecord) isInstalled() bool {
 	return false
 }
 
+func (linux *upstartRecord) command(action string) *exec.Cmd {
+	return exec.Command(upstartCommandPath, action, linux.name)
+}
+
 // Check service is running
 func (linux *upstartRecord) checkRunning() (string, bool, error) {
-	output, err := exec.Command("status", linux.name).CombinedOutput()
+	output, err := linux.command("status").CombinedOutput()
 	running, recognized := upstartStatus(linux.name, string(output), commandExitCode(err))
 	if !recognized {
 		return "", false, statusCommandError("Upstart", linux.name, output, err)
@@ -149,7 +155,7 @@ func (linux *upstartRecord) Start() (string, error) {
 		return startAction + failed, ErrAlreadyRunning
 	}
 
-	if err := exec.Command("start", linux.name).Run(); err != nil {
+	if err := linux.command("start").Run(); err != nil {
 		return startAction + failed, err
 	}
 
@@ -174,7 +180,7 @@ func (linux *upstartRecord) Stop() (string, error) {
 		return stopAction + failed, ErrAlreadyStopped
 	}
 
-	if err := exec.Command("stop", linux.name).Run(); err != nil {
+	if err := linux.command("stop").Run(); err != nil {
 		return stopAction + failed, err
 	}
 

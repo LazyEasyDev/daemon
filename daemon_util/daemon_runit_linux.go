@@ -33,7 +33,8 @@ func runitDetected(root string) bool {
 			return false
 		}
 	}
-	return true
+	_, err := exec.LookPath("sv")
+	return err == nil
 }
 
 func (linux *runitRecord) servicePath() string {

@@ -688,14 +688,25 @@ func TestSystemVStatusDoesNotRequireRedHatHelpers(t *testing.T) {
 
 func TestSystemVDetected(t *testing.T) {
 	tests := []struct {
-		name     string
-		initPath string
-		want     bool
+		name      string
+		initPath  string
+		runlevels []string
+		want      bool
 	}{
 		{
-			name:     "init directory",
+			name:      "init directory with start runlevel",
+			initPath:  "directory",
+			runlevels: []string{"2"},
+			want:      true,
+		},
+		{
+			name:     "init directory without runlevels",
 			initPath: "directory",
-			want:     true,
+		},
+		{
+			name:      "init directory with stop runlevels only",
+			initPath:  "directory",
+			runlevels: []string{"0", "1", "6"},
 		},
 		{
 			name: "missing init directory",
@@ -719,6 +730,11 @@ func TestSystemVDetected(t *testing.T) {
 					t.Fatal(err)
 				}
 				if err := os.WriteFile(filepath.Join(root, "etc/init.d"), nil, 0755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, runlevel := range test.runlevels {
+				if err := os.MkdirAll(filepath.Join(root, "etc", "rc"+runlevel+".d"), 0755); err != nil {
 					t.Fatal(err)
 				}
 			}

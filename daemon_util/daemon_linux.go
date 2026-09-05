@@ -167,7 +167,11 @@ func detectLinuxBackend(root string) (*linuxBackend, error) {
 
 func systemVDetected(root string) bool {
 	initDirectory, err := os.Stat(filepath.Join(root, "etc/init.d"))
-	return err == nil && initDirectory.IsDir()
+	if err != nil || !initDirectory.IsDir() {
+		return false
+	}
+	_, hasStartLink := existingSystemVServiceLinks(root, "")
+	return hasStartLink
 }
 
 func buildrootStyleInitDetected(root string) bool {

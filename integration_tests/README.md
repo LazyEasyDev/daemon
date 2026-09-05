@@ -65,12 +65,15 @@ boots them with a dedicated libvirt guest runner. It verifies watchdog recovery,
 reboot persistence, atomic executable replacement, direct and CLI restart,
 status, stop, and removal.
 
-The runit backend is currently covered by package tests. A live Void Linux
-integration lane has not yet been added.
+The runit lane boots the official Void Linux ARM64 root filesystem with native
+runit as PID 1. It verifies backend precedence, service supervision, reboot
+persistence, explicit restart, configured-failure and hard-crash recovery,
+graceful and forced process-group cleanup, and removal.
 
 The tests use immutable Ubuntu, Rocky Linux, Raspberry Pi OS, Poky, Alpine,
-Gentoo stage3, FreeBSD, and OpenWrt artifacts with disposable overlays, copies,
-or generated filesystems. Cached source artifacts are never modified.
+Gentoo stage3, Void Linux rootfs, FreeBSD, and OpenWrt artifacts with disposable
+overlays, copies, or generated filesystems. Cached source artifacts are never
+modified.
 
 ## Ubuntu host prerequisites
 
@@ -329,6 +332,40 @@ Gentoo-specific settings are:
 | `GENTOO_BOOT_KERNEL_URL` | Official Yocto kernel URL | Boot-kernel download source |
 | `GENTOO_BOOT_KERNEL_SHA256` | Published checksum | Optional pinned boot-kernel checksum |
 | `GENTOO_ROOTFS_SIZE_MIB` | `2048` | Disposable ext4 image size |
+
+The shared `VM_MEMORY_MIB`, `VM_VCPUS`, `VM_BOOT_TIMEOUT`, `TEST_APP_PORT`,
+`INTEGRATION_CACHE_DIR`, `INTEGRATION_ARTIFACT_DIR`, `VM_WORK_DIR`, `QEMU_ACCEL`,
+and `KEEP_VM` settings also apply.
+
+## Run the Void Linux runit lane
+
+The runit lane targets the official Void Linux ARM64 root filesystem:
+
+```sh
+./integration_tests/runit/run-qemu.sh
+```
+
+The runner verifies the pinned rootfs checksum against Void's published
+manifest, creates a disposable ext4 image, and boots it with the same verified
+generic ARM64 QEMU kernel used by the Gentoo lane. Void's runit remains PID 1.
+The guest test runs as a supervised service without SSH or online package
+installation and stores its two-boot result and diagnostics in the rootfs for
+offline extraction.
+
+Void-specific settings are:
+
+| Environment variable | Default | Purpose |
+| --- | --- | --- |
+| `VOID_RELEASE` | `20250202` | Pinned official Void image release |
+| `VOID_ROOTFS_NAME` | Release-derived ARM64 rootfs archive | Rootfs filename |
+| `VOID_ROOTFS` | Cached official archive | Existing rootfs archive |
+| `VOID_ROOTFS_URL` | Official Void rootfs URL | Download source |
+| `VOID_ROOTFS_SHA256` | Pinned published checksum | Rootfs checksum |
+| `VOID_BOOT_KERNEL_RELEASE` | `5.0.19` | Yocto release supplying the QEMU boot kernel |
+| `VOID_BOOT_KERNEL` | Cached official kernel | Existing ARM64 QEMU kernel |
+| `VOID_BOOT_KERNEL_URL` | Official Yocto kernel URL | Boot-kernel download source |
+| `VOID_BOOT_KERNEL_SHA256` | Published checksum | Optional pinned boot-kernel checksum |
+| `VOID_ROOTFS_SIZE_MIB` | `1024` | Disposable ext4 image size |
 
 The shared `VM_MEMORY_MIB`, `VM_VCPUS`, `VM_BOOT_TIMEOUT`, `TEST_APP_PORT`,
 `INTEGRATION_CACHE_DIR`, `INTEGRATION_ARTIFACT_DIR`, `VM_WORK_DIR`, `QEMU_ACCEL`,

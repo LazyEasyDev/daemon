@@ -244,8 +244,9 @@ manager, so small behavioral differences between platforms are expected.
 | systemd | Stops processes remaining in the service control group |
 | OpenRC | Stops the supervised process group |
 | System V | Starts a dedicated session and signals its process group |
+| runit | Starts a dedicated process group and signals it through runit control hooks |
 | macOS launchd | Uses launchd's default process-group cleanup |
-| runit, Buildroot, Upstart, OpenWrt, FreeBSD | Relies on native service-manager or supervisor behavior |
+| Buildroot, Upstart, OpenWrt, FreeBSD | Relies on native service-manager or supervisor behavior |
 
 Applications must not deliberately escape supervision by creating a separate
 session, process group, or console.
@@ -298,8 +299,8 @@ See [test_app/README.md](test_app/README.md) for argument, restart, and graceful
 shutdown test scenarios.
 
 Run the disposable QEMU/libvirt systemd, Rocky Linux, Raspberry Pi OS, Yocto,
-Alpine/OpenRC, Gentoo/OpenRC, Upstart, System V, Buildroot, OpenWrt, FreeBSD,
-and Windows application-level suites as documented in
+Alpine/OpenRC, Gentoo/OpenRC, Void/runit, Upstart, System V, Buildroot, OpenWrt,
+FreeBSD, and Windows application-level suites as documented in
 [integration_tests/README.md](integration_tests/README.md). They verify
 installation, boot persistence, restart behavior, stop-timeout escalation,
 process cleanup, and removal on real server and embedded operating systems.

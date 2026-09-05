@@ -90,7 +90,7 @@ func TestLinuxTemplatesConfigureWorkingDirectory(t *testing.T) {
 		}},
 		{name: "runit", source: defaultRunitConfig, workingDirectory: "/opt/worker's % files", wants: []string{
 			"cd " + shellQuote("/opt/worker's % files") + " || exit 111",
-			"exec " + shellQuote("/opt/worker's % files/worker") + " 'argument with spaces'",
+			"exec chpst -P " + shellQuote("/opt/worker's % files/worker") + " 'argument with spaces'",
 		}},
 		{name: "Upstart", source: defaultUpstartConfig, workingDirectory: "/opt/worker's % files", wants: []string{"chdir " + upstartQuote("/opt/worker's % files")}},
 		{name: "System V", source: defaultSystemVConfig, workingDirectory: "/opt/worker's % files", wants: []string{
@@ -346,6 +346,26 @@ func TestRunitCommands(t *testing.T) {
 	}
 }
 
+func TestRunitUsesProcessGroupControl(t *testing.T) {
+	for _, setting := range []string{
+		"exec chpst -P ",
+	} {
+		if !strings.Contains(defaultRunitConfig, setting) {
+			t.Fatalf("runit run template does not contain %q", setting)
+		}
+	}
+	for _, setting := range []string{
+		`pid=$(cat "$pidfile") || exit 1`,
+		`process_after_name=${process_stat##*) }`,
+		`[ "$3" = "$pid" ] || exit 1`,
+		`kill -{{.Signal}} "-$pid"`,
+	} {
+		if !strings.Contains(defaultRunitControlConfig, setting) {
+			t.Fatalf("runit control template does not contain %q", setting)
+		}
+	}
+}
+
 func TestReadRunitStopTimeout(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "stop-timeout")
 	if got := readRunitStopTimeout(path, 600); got != 600 {
@@ -579,6 +599,18 @@ func TestBuildrootDirectRestartDoesNotAddDelay(t *testing.T) {
 	}
 	if strings.Contains(restartAction, "sleep") {
 		t.Fatal("Buildroot restart must not add a post-stop delay")
+	}
+}
+
+func TestRunitWaitUntilDown(t *testing.T) {
+	directory := t.TempDir()
+	svPath := filepath.Join(directory, "sv")
+	if err := os.WriteFile(svPath, []byte("#!/bin/sh\nprintf 'down: %s: 0s, normally up\\n' \"$2\"\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", directory)
+	if err := (&runitRecord{name: "worker"}).waitUntilDown(); err != nil {
+		t.Fatalf("waitUntilDown() error = %v", err)
 	}
 }
 
@@ -861,6 +893,7 @@ func TestRunitDetected(t *testing.T) {
 		{name: "missing active runtime", serviceRoot: true, activeDirectory: "directory", svPath: "usr/bin/sv"},
 		{name: "active path is a file", serviceRoot: true, activeDirectory: "file", activeRuntime: true, svPath: "usr/bin/sv"},
 		{name: "missing sv command", serviceRoot: true, activeDirectory: "directory", activeRuntime: true},
+		{name: "missing chpst command", serviceRoot: true, activeDirectory: "directory", activeRuntime: true, svPath: "usr/bin/sv"},
 	}
 
 	for _, test := range tests {
@@ -869,13 +902,19 @@ func TestRunitDetected(t *testing.T) {
 			t.Setenv("PATH", root)
 			if test.svPath != "" {
 				svPath := filepath.Join(root, test.svPath)
-				if err := os.MkdirAll(filepath.Dir(svPath), 0755); err != nil {
+				commandDirectory := filepath.Dir(svPath)
+				if err := os.MkdirAll(commandDirectory, 0755); err != nil {
 					t.Fatal(err)
 				}
 				if err := os.WriteFile(svPath, nil, 0755); err != nil {
 					t.Fatal(err)
 				}
-				t.Setenv("PATH", filepath.Dir(svPath))
+				if test.name != "missing chpst command" {
+					if err := os.WriteFile(filepath.Join(commandDirectory, "chpst"), nil, 0755); err != nil {
+						t.Fatal(err)
+					}
+				}
+				t.Setenv("PATH", commandDirectory)
 			}
 			if test.serviceRoot {
 				if err := os.MkdirAll(filepath.Join(root, "etc/sv"), 0755); err != nil {

@@ -33,8 +33,12 @@ func runitDetected(root string) bool {
 			return false
 		}
 	}
-	_, err := exec.LookPath("sv")
-	return err == nil
+	for _, command := range []string{"chpst", "sv"} {
+		if _, err := exec.LookPath(command); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func (linux *runitRecord) servicePath() string {
@@ -180,6 +184,24 @@ func (linux *runitRecord) waitUntilSupervisedDown() error {
 	}
 }
 
+func (linux *runitRecord) waitUntilDown() error {
+	deadline := time.Now().Add(time.Duration(runitCommandWaitSeconds) * time.Second)
+	var lastOutput []byte
+	var lastErr error
+	for {
+		output, err := linux.statusCommand().CombinedOutput()
+		state, recognized := runitStatus(string(output), commandExitCode(err))
+		if recognized && state == runitServiceDown {
+			return nil
+		}
+		lastOutput, lastErr = output, err
+		if !time.Now().Before(deadline) {
+			return statusCommandError("runit", linux.name, lastOutput, lastErr)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 func (linux *runitRecord) shutdownSupervisor() error {
 	output, err := linux.shutdownCommand().CombinedOutput()
 	if err == nil {
@@ -239,6 +261,30 @@ func (linux *runitRecord) Install(args ...string) (string, error) {
 		0755,
 	); err != nil {
 		return rollback(err)
+	}
+	controlDirectory := filepath.Join(linux.servicePath(), "control")
+	if err := os.Mkdir(controlDirectory, 0755); err != nil {
+		return rollback(err)
+	}
+	for _, control := range []struct {
+		name   string
+		signal string
+	}{
+		{name: "t", signal: "TERM"},
+		{name: "k", signal: "KILL"},
+	} {
+		if err := writeTemplateFile(
+			filepath.Join(controlDirectory, control.name),
+			"runitControlConfig",
+			defaultRunitControlConfig,
+			template.FuncMap{"shellQuote": shellQuote},
+			&struct {
+				PIDFile, Signal string
+			}{filepath.Join(linux.servicePath(), "supervise", "pid"), control.signal},
+			0755,
+		); err != nil {
+			return rollback(err)
+		}
 	}
 	stopTimeout := strconv.FormatInt(linux.stopTimeoutSeconds(), 10) + "\n"
 	if err := os.WriteFile(linux.stopTimeoutPath(), []byte(stopTimeout), 0644); err != nil {
@@ -315,7 +361,9 @@ func (linux *runitRecord) Stop() (string, error) {
 		return stopAction + failed, ErrAlreadyStopped
 	}
 	if err := linux.stopCommand().Run(); err != nil {
-		return stopAction + failed, err
+		if waitErr := linux.waitUntilDown(); waitErr != nil {
+			return stopAction + failed, errors.Join(err, waitErr)
+		}
 	}
 
 	return stopAction + success, nil
@@ -336,5 +384,24 @@ func (linux *runitRecord) Status() (string, error) {
 const defaultRunitConfig = `#!/bin/sh
 
 cd {{shellQuote .WorkingDirectory}} || exit 111
-exec {{shellQuote .Path}}{{if .Args}} {{.Args}}{{end}}
+exec chpst -P {{shellQuote .Path}}{{if .Args}} {{.Args}}{{end}}
+`
+
+const defaultRunitControlConfig = `#!/bin/sh
+
+pidfile={{shellQuote .PIDFile}}
+pid=$(cat "$pidfile") || exit 1
+case "$pid" in
+	''|*[!0-9]*) exit 1 ;;
+esac
+[ "$pid" -gt 1 ] || exit 1
+
+process_stat=$(cat "/proc/$pid/stat") || exit 1
+process_after_name=${process_stat##*) }
+[ "$process_after_name" != "$process_stat" ] || exit 1
+set -- $process_after_name
+[ "$#" -ge 3 ] || exit 1
+[ "$3" = "$pid" ] || exit 1
+
+kill -{{.Signal}} "-$pid"
 `

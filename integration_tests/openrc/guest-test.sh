@@ -178,6 +178,8 @@ collect_artifacts() {
 	mkdir -p "$artifact_dir"
 	{
 		printf 'phase=%s\nscenario=%s\nservice=%s\n' "$phase" "$current_scenario" "$service_name"
+		printf '\nOS release:\n'
+		cat /etc/os-release
 		uname -a
 		printf '\nPID 1:\n'
 		cat /proc/1/comm

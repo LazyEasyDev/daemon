@@ -34,6 +34,11 @@ The OpenRC lane performs the same application-level lifecycle checks and also
 verifies its generated `openrc-run` script, `supervise-daemon` configuration,
 default-runlevel registration, respawn behavior, and process-group cleanup.
 
+The Gentoo lane runs those OpenRC checks against an official ARM64 Gentoo
+OpenRC stage3. It uses serial-only direct QEMU boot, verifies the published
+stage3 and boot-kernel checksums, and performs the complete lifecycle without
+cloud-init, SSH, or online package installation.
+
 The Upstart lane boots Ubuntu 14.04 LTS with Upstart as PID 1 and verifies the
 generated job definition, boot auto-start, explicit restart, graceful stop,
 configured-failure respawn, hard-crash respawn, and complete removal.
@@ -55,16 +60,17 @@ The Yocto lane boots the official Poky 5.0.19 Scarthgap LTS `qemuarm64`
 reboot persistence, explicit restart, configured-failure and direct `SIGKILL`
 watchdog recovery, graceful and forced process-group cleanup, and removal.
 
-The Buildroot backend is currently covered by package tests and an image-matrix
-builder for generating multiple Buildroot variants from source. A dedicated
-Buildroot libvirt guest runner can consume these generated images.
+The Buildroot lane builds baseline, debug, and release variants from source and
+boots them with a dedicated libvirt guest runner. It verifies watchdog recovery,
+reboot persistence, atomic executable replacement, direct and CLI restart,
+status, stop, and removal.
 
 The runit backend is currently covered by package tests. A live Void Linux
 integration lane has not yet been added.
 
 The tests use immutable Ubuntu, Rocky Linux, Raspberry Pi OS, Poky, Alpine,
-FreeBSD, and OpenWrt images with disposable overlays or copies. Base images are
-never modified.
+Gentoo stage3, FreeBSD, and OpenWrt artifacts with disposable overlays, copies,
+or generated filesystems. Cached source artifacts are never modified.
 
 ## Ubuntu host prerequisites
 
@@ -75,7 +81,7 @@ sudo apt update
 sudo apt install libvirt-daemon-system libvirt-clients virtinst \
   cloud-image-utils qemu-utils qemu-system-x86 qemu-system-arm \
   qemu-efi-aarch64 genisoimage e2fsprogs util-linux wget openssh-client \
-  cpio kmod mtools xz-utils
+  cpio fakeroot kmod mtools xz-utils
 sudo usermod -aG libvirt,kvm "$USER"
 ```
 
@@ -288,6 +294,45 @@ The shared `VM_MEMORY_MIB`, `VM_VCPUS`, `VM_DISK_GIB`, `VM_BOOT_TIMEOUT`,
 `VM_VIRT_TYPE`, `VM_NETWORK`, `LIBVIRT_URI`, `ARM_UEFI_CODE`, `ARM_UEFI_VARS`,
 `INTEGRATION_CACHE_DIR`, `INTEGRATION_ARTIFACT_DIR`, and `KEEP_VM` settings also
 apply. The OpenRC defaults are 1 GiB memory and a 4 GiB overlay.
+
+## Run the Gentoo OpenRC lane
+
+The Gentoo lane targets the official ARM64 OpenRC stage3:
+
+```sh
+./integration_tests/gentoo/run-qemu.sh
+```
+
+A stage3 contains Gentoo's root userspace but no kernel or bootloader. The
+runner therefore creates a disposable ext4 image from the stage3 and boots it
+with the checksum-verified generic ARM64 QEMU kernel from Yocto 5.0.19. Gentoo's
+`init` remains PID 1, and Gentoo's OpenRC manages the complete test lifecycle.
+The external kernel is used only as a QEMU boot harness.
+
+The test runs from an OpenRC `local.d` hook after all default-runlevel services.
+It performs pre-reboot and post-reboot phases, records durable PASS or FAIL
+state, emits progress through the serial console, powers off the guest, and
+extracts its artifacts from the stopped ext4 image. It does not require guest
+networking or modify the cached stage3.
+
+Gentoo-specific settings are:
+
+| Environment variable | Default | Purpose |
+| --- | --- | --- |
+| `GENTOO_STAGE3_BUILD` | `20260830T234553Z` | Pinned official stage3 build |
+| `GENTOO_STAGE3_NAME` | Build-derived ARM64 OpenRC archive | Stage3 filename |
+| `GENTOO_STAGE3` | Cached official archive | Existing stage3 archive |
+| `GENTOO_STAGE3_URL` | Official dated stage3 URL | Download source |
+| `GENTOO_STAGE3_SHA256` | Published checksum | Optional pinned stage3 checksum |
+| `GENTOO_BOOT_KERNEL_RELEASE` | `5.0.19` | Yocto release supplying the QEMU boot kernel |
+| `GENTOO_BOOT_KERNEL` | Cached official kernel | Existing ARM64 QEMU kernel |
+| `GENTOO_BOOT_KERNEL_URL` | Official Yocto kernel URL | Boot-kernel download source |
+| `GENTOO_BOOT_KERNEL_SHA256` | Published checksum | Optional pinned boot-kernel checksum |
+| `GENTOO_ROOTFS_SIZE_MIB` | `2048` | Disposable ext4 image size |
+
+The shared `VM_MEMORY_MIB`, `VM_VCPUS`, `VM_BOOT_TIMEOUT`, `TEST_APP_PORT`,
+`INTEGRATION_CACHE_DIR`, `INTEGRATION_ARTIFACT_DIR`, `VM_WORK_DIR`, `QEMU_ACCEL`,
+and `KEEP_VM` settings also apply.
 
 ## Run the Upstart lane
 

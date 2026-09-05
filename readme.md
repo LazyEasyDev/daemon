@@ -298,8 +298,8 @@ See [test_app/README.md](test_app/README.md) for argument, restart, and graceful
 shutdown test scenarios.
 
 Run the disposable QEMU/libvirt systemd, Rocky Linux, Raspberry Pi OS, Yocto,
-OpenRC, Upstart, System V, Buildroot, OpenWrt, FreeBSD, and Windows
-application-level suites as documented in
+Alpine/OpenRC, Gentoo/OpenRC, Upstart, System V, Buildroot, OpenWrt, FreeBSD,
+and Windows application-level suites as documented in
 [integration_tests/README.md](integration_tests/README.md). They verify
 installation, boot persistence, restart behavior, stop-timeout escalation,
 process cleanup, and removal on real server and embedded operating systems.

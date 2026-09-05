@@ -100,6 +100,22 @@ var linuxBackends = []linuxBackend{
 		},
 	},
 	{
+		name:     "runit",
+		detected: runitDetected,
+		serviceDirectory: func(root string) serviceDirectory {
+			return serviceDirectory{
+				path: filepath.Join(root, "var/service"),
+				isRunning: func(name string) (bool, error) {
+					_, running, err := (&runitRecord{name: name}).checkRunning()
+					return running, err
+				},
+			}
+		},
+		newRecord: func(name, description, executablePath string) (Daemon, error) {
+			return &runitRecord{name: name, description: description, executablePath: executablePath}, nil
+		},
+	},
+	{
 		name:     "buildroot-style init",
 		detected: buildrootStyleInitDetected,
 		serviceDirectory: func(root string) serviceDirectory {

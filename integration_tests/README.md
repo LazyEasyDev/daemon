@@ -59,6 +59,9 @@ The Buildroot backend is currently covered by package tests and an image-matrix
 builder for generating multiple Buildroot variants from source. A dedicated
 Buildroot libvirt guest runner can consume these generated images.
 
+The runit backend is currently covered by package tests. A live Void Linux
+integration lane has not yet been added.
+
 The tests use immutable Ubuntu, Rocky Linux, Raspberry Pi OS, Poky, Alpine,
 FreeBSD, and OpenWrt images with disposable overlays or copies. Base images are
 never modified.

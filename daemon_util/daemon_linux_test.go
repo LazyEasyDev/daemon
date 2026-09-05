@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"text/template"
+	"time"
 )
 
 func TestLinuxTemplatesConfigureStopTimeout(t *testing.T) {
@@ -86,6 +87,10 @@ func TestLinuxTemplatesConfigureWorkingDirectory(t *testing.T) {
 		{name: "OpenWrt", source: defaultOpenWrtConfig, workingDirectory: "/opt/worker's % files", wants: []string{
 			"WORKING_DIRECTORY=" + shellQuote("/opt/worker's % files"),
 			`procd_set_param command /bin/sh -c 'cd "$1" && shift && exec "$@"' sh "$WORKING_DIRECTORY" "$PROG" 'argument with spaces'`,
+		}},
+		{name: "runit", source: defaultRunitConfig, workingDirectory: "/opt/worker's % files", wants: []string{
+			"cd " + shellQuote("/opt/worker's % files") + " || exit 111",
+			"exec " + shellQuote("/opt/worker's % files/worker") + " 'argument with spaces'",
 		}},
 		{name: "Upstart", source: defaultUpstartConfig, workingDirectory: "/opt/worker's % files", wants: []string{"chdir " + upstartQuote("/opt/worker's % files")}},
 		{name: "System V", source: defaultSystemVConfig, workingDirectory: "/opt/worker's % files", wants: []string{
@@ -277,6 +282,86 @@ func TestOpenRCStatus(t *testing.T) {
 				t.Fatalf("openRCStatus() = (%v, %v, %v, %v, %v), want (%v, %v, %v, %v, %v)", state, state.running(), state.startable(), state.stoppable(), recognized, test.wantState, test.wantRunning, test.wantStartable, test.wantStoppable, test.wantRecognized)
 			}
 		})
+	}
+}
+
+func TestRunitStatus(t *testing.T) {
+	tests := []struct {
+		status         string
+		exitCode       int
+		wantState      runitServiceState
+		wantRecognized bool
+	}{
+		{status: "run: /var/service/worker: (pid 42) 5s", wantState: runitServiceRun, wantRecognized: true},
+		{status: "finish: /var/service/worker: (pid 43) 1s", wantState: runitServiceFinish, wantRecognized: true},
+		{status: "down: /var/service/worker: 3s, normally up", wantState: runitServiceDown, wantRecognized: true},
+		{status: "down: /var/service/worker: 3s, normally down", wantState: runitServiceDown, wantRecognized: true},
+		{status: "fail: /var/service/worker: unable to change to service directory"},
+		{status: "down: /var/service/worker: 3s, normally up", exitCode: 1},
+	}
+
+	for _, test := range tests {
+		state, recognized := runitStatus(test.status, test.exitCode)
+		if state != test.wantState || recognized != test.wantRecognized {
+			t.Errorf("runitStatus(%q, %d) = (%v, %v), want (%v, %v)", test.status, test.exitCode, state, recognized, test.wantState, test.wantRecognized)
+		}
+	}
+}
+
+func TestRunitUnsupervised(t *testing.T) {
+	for _, status := range []string{
+		"fail: /etc/sv/worker: unable to open supervise/ok: file does not exist",
+		"warning: /etc/sv/worker: unable to open supervise/control: file does not exist",
+	} {
+		if !runitUnsupervised(status, 1) {
+			t.Errorf("runitUnsupervised(%q, 1) = false, want true", status)
+		}
+	}
+	if runitUnsupervised("fail: /etc/sv/worker: permission denied", 1) {
+		t.Fatal("permission failure reported as unsupervised")
+	}
+}
+
+func TestRunitCommands(t *testing.T) {
+	service := &runitRecord{name: "worker"}
+	if err := service.SetStopTimeout(45 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		got  []string
+		want []string
+	}{
+		{name: "status", got: service.statusCommand().Args, want: []string{"sv", "status", "/var/service/worker"}},
+		{name: "start", got: service.startCommand().Args, want: []string{"sv", "-w", "7", "start", "/var/service/worker"}},
+		{name: "stop", got: service.stopCommand().Args, want: []string{"sv", "-w", "45", "force-stop", "/var/service/worker"}},
+		{name: "shutdown", got: service.shutdownCommand().Args, want: []string{"sv", "-w", "45", "force-shutdown", "/etc/sv/worker"}},
+	}
+
+	for _, test := range tests {
+		if !slices.Equal(test.got, test.want) {
+			t.Errorf("%s command = %q, want %q", test.name, test.got, test.want)
+		}
+	}
+}
+
+func TestReadRunitStopTimeout(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "stop-timeout")
+	if got := readRunitStopTimeout(path, 600); got != 600 {
+		t.Fatalf("missing stop timeout = %d, want 600", got)
+	}
+	if err := os.WriteFile(path, []byte("45\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got := readRunitStopTimeout(path, 600); got != 45 {
+		t.Fatalf("stored stop timeout = %d, want 45", got)
+	}
+	if err := os.WriteFile(path, []byte("invalid\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got := readRunitStopTimeout(path, 600); got != 600 {
+		t.Fatalf("invalid stop timeout = %d, want 600", got)
 	}
 }
 
@@ -743,6 +828,76 @@ func TestSystemVDetected(t *testing.T) {
 				t.Fatalf("systemVDetected() = %v, want %v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestRunitDetected(t *testing.T) {
+	tests := []struct {
+		name            string
+		serviceRoot     bool
+		activeDirectory string
+		activeRuntime   bool
+		want            bool
+	}{
+		{name: "active service directory", serviceRoot: true, activeDirectory: "directory", activeRuntime: true, want: true},
+		{name: "active service symlink", serviceRoot: true, activeDirectory: "symlink", want: true},
+		{name: "missing service definitions", activeDirectory: "directory", activeRuntime: true},
+		{name: "missing active directory", serviceRoot: true},
+		{name: "missing active runtime", serviceRoot: true, activeDirectory: "directory"},
+		{name: "active path is a file", serviceRoot: true, activeDirectory: "file", activeRuntime: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			if test.serviceRoot {
+				if err := os.MkdirAll(filepath.Join(root, "etc/sv"), 0755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.MkdirAll(filepath.Join(root, "var"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			if test.activeRuntime {
+				if err := os.MkdirAll(filepath.Join(root, "run/runit/runsvdir/current"), 0755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			switch test.activeDirectory {
+			case "directory":
+				if err := os.Mkdir(filepath.Join(root, "var/service"), 0755); err != nil {
+					t.Fatal(err)
+				}
+			case "symlink":
+				target := filepath.Join(root, "run/runit/runsvdir/current")
+				if err := os.MkdirAll(target, 0755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, filepath.Join(root, "var/service")); err != nil {
+					t.Fatal(err)
+				}
+			case "file":
+				if err := os.WriteFile(filepath.Join(root, "var/service"), nil, 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			if got := runitDetected(root); got != test.want {
+				t.Fatalf("runitDetected() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestRunitPrecedesFallbackBackends(t *testing.T) {
+	positions := make(map[string]int)
+	for index, backend := range linuxBackends {
+		positions[backend.name] = index
+	}
+	for _, fallback := range []string{"buildroot-style init", "systemV"} {
+		if positions["runit"] >= positions[fallback] {
+			t.Fatalf("runit backend position %d must precede %s position %d", positions["runit"], fallback, positions[fallback])
+		}
 	}
 }
 

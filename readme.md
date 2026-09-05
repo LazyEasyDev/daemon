@@ -228,7 +228,7 @@ On macOS, use the same command without `sudo`.
 
 | Platform | Service manager | Installation scope |
 | --- | --- | --- |
-| Linux | systemd, OpenRC, OpenWrt procd, Upstart, System V, or Buildroot init | System-wide |
+| Linux | systemd, OpenRC, OpenWrt procd, runit, Upstart, System V, or Buildroot init | System-wide |
 | macOS | launchd | Current user |
 | FreeBSD | rc.d with `/usr/sbin/daemon` | System-wide |
 | Windows | Service Control Manager | System-wide, LocalSystem |
@@ -245,7 +245,7 @@ manager, so small behavioral differences between platforms are expected.
 | OpenRC | Stops the supervised process group |
 | System V | Starts a dedicated session and signals its process group |
 | macOS launchd | Uses launchd's default process-group cleanup |
-| Buildroot, Upstart, OpenWrt, FreeBSD | Relies on native service-manager or supervisor behavior |
+| runit, Buildroot, Upstart, OpenWrt, FreeBSD | Relies on native service-manager or supervisor behavior |
 
 Applications must not deliberately escape supervision by creating a separate
 session, process group, or console.
@@ -349,8 +349,9 @@ available init system at runtime in this order:
 2. OpenRC;
 3. Upstart;
 4. OpenWrt procd;
-5. Buildroot-style init;
-6. System V as the fallback when `/etc/init.d` exists.
+5. runit;
+6. Buildroot-style init;
+7. System V as the fallback when `/etc/init.d` and a normal start-runlevel directory exist.
 
 Installation creates the native definition expected by the selected backend:
 
@@ -359,6 +360,7 @@ Installation creates the native definition expected by the selected backend:
 | systemd | `/etc/systemd/system/<name>.service` |
 | OpenRC, OpenWrt, System V | `/etc/init.d/<name>` |
 | Upstart | `/etc/init/<name>.conf` |
+| runit | `/etc/sv/<name>/run`, enabled through `/var/service/<name>` |
 | Buildroot | `/etc/init.d/S90<name>` |
 | FreeBSD rc.d | `/usr/local/etc/rc.d/<name>` |
 | macOS launchd | `~/Library/LaunchAgents/<name>.plist` |

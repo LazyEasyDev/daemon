@@ -94,3 +94,25 @@ func TestListServiceStatusesPropagatesStatusError(t *testing.T) {
 		t.Fatalf("listServiceStatuses() error = %v, want %v", err, queryErr)
 	}
 }
+
+func TestListServiceStatusesIncludesServiceSymlink(t *testing.T) {
+	directory := t.TempDir()
+	target := t.TempDir()
+	registrationName := managedServicePrefix + "worker"
+	if err := os.Symlink(target, filepath.Join(directory, registrationName)); err != nil {
+		t.Fatal(err)
+	}
+
+	statuses, err := listServiceStatuses(serviceDirectory{
+		path: directory,
+		isRunning: func(name string) (bool, error) {
+			return name == registrationName, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(statuses) != 1 || statuses[0].Name != "worker" || statuses[0].Status != ServiceRunning {
+		t.Fatalf("listServiceStatuses() = %#v, want worker running", statuses)
+	}
+}

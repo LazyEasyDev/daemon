@@ -465,6 +465,24 @@ func TestBuildrootValidatesIdentityBeforeSignals(t *testing.T) {
 	}
 }
 
+func TestBuildrootDirectRestartDoesNotAddDelay(t *testing.T) {
+	restartStart := strings.Index(defaultBuildrootConfig, "\trestart)\n")
+	if restartStart < 0 {
+		t.Fatal("Buildroot restart action is missing")
+	}
+	statusOffset := strings.Index(defaultBuildrootConfig[restartStart:], "\n\tstatus)\n")
+	if statusOffset < 0 {
+		t.Fatal("Buildroot restart action is incomplete")
+	}
+	restartAction := defaultBuildrootConfig[restartStart : restartStart+statusOffset]
+	if !strings.Contains(restartAction, "\t\tstop &&\n\t\t\tstart") {
+		t.Fatal("Buildroot restart must start immediately after a successful stop")
+	}
+	if strings.Contains(restartAction, "sleep") {
+		t.Fatal("Buildroot restart must not add a post-stop delay")
+	}
+}
+
 func TestLinuxWatcherTemplatesSuperviseApplications(t *testing.T) {
 	tests := []struct {
 		name   string

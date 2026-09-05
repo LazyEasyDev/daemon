@@ -21,6 +21,9 @@ daemon
 # Generated cross-platform binaries
 /build/
 
+# Repository-local build and dependency caches
+/.cache/
+
 # Application-level integration test diagnostics
 /integration_tests/artifacts/
 

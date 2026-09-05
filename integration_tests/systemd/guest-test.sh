@@ -15,6 +15,11 @@ state_dir="/var/tmp/daemon-itest-$service_name"
 artifact_dir="$state_dir/artifacts"
 fixture_path="$install_dir/relative-path-test.txt"
 current_scenario=initialization
+expect_selinux=${DAEMON_ITEST_EXPECT_SELINUX:-0}
+temporary_app=${DAEMON_ITEST_TEMP_APP:-/tmp/test-app}
+warning_service_name="${service_name}warning"
+warning_unit_path="/etc/systemd/system/lz_lz_${warning_service_name}.service"
+warning_metadata_path="/var/lib/daemon-util/services/lz_lz_${warning_service_name}.json"
 
 log() {
 	printf '[systemd-itest] %s\n' "$*"
@@ -66,6 +71,70 @@ assert_no_test_app_processes() {
 			fail "test application process ${process##*/} leaked after cleanup"
 		fi
 	done
+}
+
+assert_selinux_enforcing() {
+	[[ "$expect_selinux" == 1 ]] || return
+	command -v getenforce >/dev/null || fail "getenforce is required for the SELinux lane"
+	[[ -r /sys/fs/selinux/enforce ]] || fail "SELinux enforce state is unavailable"
+	[[ "$(tr -d '[:space:]' </sys/fs/selinux/enforce)" == 1 ]] || fail "SELinux kernel enforcement is disabled"
+	[[ "$(getenforce)" == Enforcing ]] || fail "SELinux is not enforcing"
+}
+
+verify_selinux_warning() {
+	[[ "$expect_selinux" == 1 ]] || return
+	local output status
+	[[ -x "$temporary_app" ]] || fail "missing temporary test application at $temporary_app"
+	rm -f "$warning_unit_path" "$warning_metadata_path"
+	set +e
+	output=$("$daemon_bin" install "$warning_service_name" "$temporary_app" 2>&1)
+	status=$?
+	set -e
+	printf '%s\n' "$output" >"$artifact_dir/selinux-warning.txt"
+	(( status != 0 )) || fail "SELinux-risky temporary executable installed without confirmation"
+	assert_contains "$output" "Warning: SELinux may prevent this system service from starting" "SELinux warning"
+	assert_contains "$output" "$temporary_app" "SELinux warning executable"
+	assert_contains "$output" "requires a terminal" "noninteractive warning refusal"
+	assert_contains "$output" "--ignore-warnings" "warning bypass guidance"
+	[[ ! -e "$warning_unit_path" ]] || fail "warning-only install created a systemd unit"
+	[[ ! -e "$warning_metadata_path" ]] || fail "warning-only install created metadata"
+}
+
+assert_selinux_path_labeled() {
+	local path=$1 context
+	[[ "$expect_selinux" == 1 ]] || return
+	context=$(ls -Zd -- "$path" 2>&1) || fail "could not read SELinux context for $path"
+	[[ "$context" != *unlabeled_t* && "$context" != "? "* ]] || fail "invalid SELinux context for $path: $context"
+	matchpathcon -V "$path" >/dev/null || fail "SELinux context does not match policy for $path"
+}
+
+verify_selinux_file_contexts() {
+	[[ "$expect_selinux" == 1 ]] || return
+	assert_selinux_path_labeled "$daemon_bin"
+	assert_selinux_path_labeled "$app_bin"
+	assert_selinux_path_labeled "$unit_path"
+	assert_selinux_path_labeled "$metadata_path"
+}
+
+verify_selinux_runtime_context() {
+	[[ "$expect_selinux" == 1 ]] || return
+	local pid context
+	pid=$(http_pid)
+	context=$(tr -d '\000' <"/proc/$pid/attr/current" 2>/dev/null || true)
+	[[ -n "$context" ]] || fail "test application PID $pid has no SELinux runtime context"
+	[[ "$context" != *unlabeled_t* ]] || fail "test application PID $pid is unlabeled: $context"
+}
+
+assert_no_relevant_avc_denials() {
+	[[ "$expect_selinux" == 1 ]] || return
+	local patterns="test-app|daemon-itest|lz_lz_${service_name}" journal_denials audit_denials denials
+	journal_denials=$(journalctl -k -b --no-pager 2>/dev/null | grep -Ei 'avc:.*denied' | grep -Ei "$patterns" || true)
+	audit_denials=
+	if command -v ausearch >/dev/null; then
+		audit_denials=$(timeout --kill-after=2s 5s ausearch -m AVC,USER_AVC -ts boot 2>/dev/null | grep -Ei "$patterns" || true)
+	fi
+	denials="${journal_denials}${audit_denials}"
+	[[ -z "$denials" ]] || fail "service-specific SELinux AVC denial detected: $denials"
 }
 
 wait_for_http() {
@@ -188,6 +257,19 @@ collect_artifacts() {
 	systemctl cat "$unit_name" --no-pager >"$artifact_dir/${label}-unit.txt" 2>&1 || true
 	journalctl -u "$unit_name" --no-pager >"$artifact_dir/${label}-journal.txt" 2>&1 || true
 	ps -ef >"$artifact_dir/${label}-processes.txt" 2>&1 || true
+	if [[ "$expect_selinux" == 1 ]]; then
+		{
+			getenforce
+			sestatus
+			printf '\nFile contexts:\n'
+			ls -lZd "$install_dir" "$daemon_bin" "$app_bin" "$unit_path" "$metadata_path" 2>&1 || true
+			printf '\nExpected contexts:\n'
+			matchpathcon -V "$daemon_bin" "$app_bin" "$unit_path" "$metadata_path" 2>&1 || true
+		} >"$artifact_dir/${label}-selinux.txt" 2>&1 || true
+		ps -eZ >"$artifact_dir/${label}-selinux-processes.txt" 2>&1 || true
+		journalctl -k -b --no-pager | grep -Ei 'avc:|selinux' >"$artifact_dir/${label}-selinux-kernel.txt" 2>&1 || true
+		timeout --kill-after=2s 5s ausearch -m AVC,USER_AVC -ts boot >"$artifact_dir/${label}-selinux-audit.txt" 2>&1 || true
+	fi
 	cp -f "$install_dir"/*-events.jsonl "$artifact_dir/" 2>/dev/null || true
 	cp -f "$state_dir"/*.json "$state_dir"/*.pid "$artifact_dir/" 2>/dev/null || true
 	chmod -R a+rX "$artifact_dir" 2>/dev/null || true
@@ -202,6 +284,11 @@ cleanup_service() {
 		}
 	fi
 	rm -f "$metadata_path"
+	if [[ "$expect_selinux" == 1 ]]; then
+		systemctl disable --now "lz_lz_${warning_service_name}.service" >/dev/null 2>&1 || true
+		rm -f "$warning_unit_path" "$warning_metadata_path"
+		systemctl daemon-reload >/dev/null 2>&1 || true
+	fi
 }
 
 on_exit() {
@@ -222,15 +309,24 @@ require_environment() {
 	[[ -f "$fixture_path" ]] || fail "missing relative-path fixture at $fixture_path"
 	[[ "$(ps -p 1 -o comm= | tr -d '[:space:]')" == systemd ]] || fail "systemd is not PID 1"
 	command -v python3 >/dev/null || fail "python3 is required in the guest"
+	if [[ "$expect_selinux" == 1 ]]; then
+		command -v matchpathcon >/dev/null || fail "matchpathcon is required for the SELinux lane"
+		command -v timeout >/dev/null || fail "timeout is required for the SELinux lane"
+		assert_selinux_enforcing
+	fi
 	mkdir -p "$state_dir" "$artifact_dir"
 }
 
 install_scenario() {
 	local timeout=$1
 	local events=$2
+	local install_flags=(--ignore-warnings)
 	shift 2
+	if [[ "$expect_selinux" == 1 ]]; then
+		install_flags=()
+	fi
 	rm -f "$events" "$install_dir/child.pid"
-	"$daemon_bin" install --stop-timeout "$timeout" --ignore-warnings \
+	"$daemon_bin" install --stop-timeout "$timeout" "${install_flags[@]}" \
 		"$service_name" "$app_bin" \
 		--enabled=true \
 		--message "hello systemd" \
@@ -251,6 +347,7 @@ verify_definition() {
 	assert_file_contains "$unit_path" 'RestartSec=20s'
 	assert_file_contains "$unit_path" 'KillMode=control-group'
 	[[ "$(systemctl is-enabled "$unit_name")" == enabled ]] || fail "systemd unit is not enabled"
+	verify_selinux_file_contexts
 }
 
 verify_management_commands() {
@@ -270,6 +367,7 @@ pre_reboot() {
 	current_scenario=pre-reboot
 	log "installing boot-persistence scenario"
 	cleanup_service
+	verify_selinux_warning
 	install_scenario 5s "$events" \
 		--stop_delay 1s \
 		--spawn-child=true \
@@ -278,6 +376,7 @@ pre_reboot() {
 	assert_file_contains "$unit_path" 'TimeoutStopSec=5s'
 	"$daemon_bin" start "$service_name"
 	wait_for_http true >"$state_dir/pre-reboot-http.json"
+	verify_selinux_runtime_context
 	verify_management_commands
 	child_pid=$(cat "$install_dir/child.pid")
 	process_is_test_app "$child_pid" || fail "child process $child_pid is not running"
@@ -288,7 +387,7 @@ pre_reboot() {
 
 post_reboot() {
 	local boot_events="$install_dir/boot-events.jsonl"
-	local restart_parent restart_child new_parent
+	local restart_parent restart_child new_parent hard_crash_parent
 	local graceful_started graceful_elapsed
 	local auto_events="$install_dir/restart-events.jsonl"
 	local forced_events="$install_dir/forced-events.jsonl"
@@ -298,6 +397,7 @@ post_reboot() {
 	log "verifying boot persistence"
 	[[ "$(systemctl is-enabled "$unit_name")" == enabled ]] || fail "service lost enablement after reboot"
 	wait_for_http true >"$state_dir/post-reboot-http.json"
+	verify_selinux_runtime_context
 	(( $(event_count "$boot_events" started) >= 2 )) || fail "service did not record a second startup after reboot"
 	verify_management_commands
 
@@ -334,6 +434,13 @@ post_reboot() {
 	[[ "$new_parent" != "$restart_parent" ]] || fail "automatic restart reused parent PID $restart_parent"
 	(( $(event_count "$auto_events" started) >= 2 )) || fail "automatic restart did not record a second startup"
 	assert_event "$auto_events" failure
+	kill -KILL "$new_parent"
+	hard_crash_parent=$(wait_for_new_http_pid "$new_parent" 45)
+	wait_process_gone "$new_parent"
+	[[ "$hard_crash_parent" != "$new_parent" ]] || fail "hard-crash restart reused parent PID $new_parent"
+	(( $(event_count "$auto_events" started) >= 3 )) || fail "hard crash did not record a third startup"
+	verify_management_commands
+	verify_selinux_runtime_context
 	"$daemon_bin" stop "$service_name"
 	"$daemon_bin" remove "$service_name"
 
@@ -346,6 +453,7 @@ post_reboot() {
 	assert_file_contains "$unit_path" 'TimeoutStopSec=2s'
 	"$daemon_bin" start "$service_name"
 	wait_for_http true >"$state_dir/forced-stop-http.json"
+	verify_selinux_runtime_context
 	forced_child=$(cat "$install_dir/child.pid")
 	forced_started=$(date +%s)
 	"$daemon_bin" stop "$service_name"
@@ -368,6 +476,7 @@ post_reboot() {
 		fail "systemd enablement link remains after final removal"
 	fi
 	assert_no_test_app_processes
+	assert_no_relevant_avc_denials
 	log "all systemd application-level tests passed"
 }
 

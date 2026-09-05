@@ -11,6 +11,8 @@ service_path="/etc/init.d/S90$registration_name"
 app="$install_dir/test-app"
 fixture="$install_dir/relative-path-test.txt"
 events="$install_dir/buildroot-events.jsonl"
+pidfile="/var/run/$registration_name.pid"
+identityfile="${pidfile}.identity"
 
 log() {
 	printf '[buildroot-itest] %s\n' "$*"
@@ -19,6 +21,22 @@ log() {
 fail() {
 	printf '[buildroot-itest] ERROR: %s\n' "$*" >&2
 	exit 1
+}
+
+process_is_test_app() {
+	process_pid=$1
+	executable=$(readlink "/proc/$process_pid/exe" 2>/dev/null || true)
+	[ "$executable" = "$app" ] || [ "$executable" = "$app (deleted)" ]
+}
+
+wait_process_gone() {
+	process_pid=$1
+	attempt=0
+	while process_is_test_app "$process_pid"; do
+		[ "$attempt" -lt 30 ] || fail "test application process $process_pid is still running"
+		sleep 1
+		attempt=$((attempt + 1))
+	done
 }
 
 wait_for_http() {
@@ -87,12 +105,48 @@ case "$phase" in
 		[ "$(event_count started)" -ge 2 ] || fail 'watchdog did not record a second application start'
 		wait_for_http
 		log "watchdog restarted application from PID $old_pid to $new_pid"
+		"$install_dir/daemon" stop "$service_name"
+		"$install_dir/daemon" remove "$service_name"
+		"$install_dir/daemon" install --stop-timeout 5s "$service_name" "$app" \
+			--enabled=true --message 'hello buildroot' --count 7 --port "$port" \
+			--file-path relative-path-test.txt --event-path "$events"
+		[ -x "$service_path" ] || fail 'stable Buildroot service script was not installed'
+		grep -Fq 'IDENTITYFILE=${PIDFILE}.identity' "$service_path" || fail 'identity file is not configured'
+		"$service_path" start
+		wait_for_http
 		log 'pre-reboot checks passed'
 		;;
 	post-reboot)
 		require_buildroot
 		[ -x "$service_path" ] || fail 'Buildroot S90 service disappeared after reboot'
 		wait_for_http
+		old_pid=$(http_pid)
+		[ -n "$old_pid" ] || fail 'could not read hot-replacement application PID'
+		identity_before=$(cat "$identityfile")
+		case "$identity_before" in
+			"$old_pid "*) ;;
+			*) fail "identity file does not belong to PID $old_pid" ;;
+		esac
+		replacement="$install_dir/.test-app.replacement.$$"
+		cp -p "$app" "$replacement"
+		mv -f "$replacement" "$app"
+		[ "$(readlink "/proc/$old_pid/exe" 2>/dev/null || true)" = "$app (deleted)" ] || fail 'running executable was not atomically replaced'
+		sleep 2
+		[ "$(http_pid)" = "$old_pid" ] || fail 'watchdog restarted the application after hot replacement'
+		[ "$(cat "$identityfile")" = "$identity_before" ] || fail 'process identity changed after hot replacement'
+		"$install_dir/daemon" status "$service_name" | grep -qi running || fail 'status does not report running after hot replacement'
+		"$install_dir/daemon" stop "$service_name"
+		wait_process_gone "$old_pid"
+		[ ! -e "$pidfile" ] || fail 'PID file remains after hot-replacement stop'
+		[ ! -e "$identityfile" ] || fail 'identity file remains after hot-replacement stop'
+		"$install_dir/daemon" start "$service_name"
+		wait_for_http
+		new_pid=$(http_pid)
+		[ "$new_pid" != "$old_pid" ] || fail "hot-replacement restart reused PID $old_pid"
+		case "$(cat "$identityfile")" in
+			"$new_pid "*) ;;
+			*) fail 'new application identity was not recorded' ;;
+		esac
 		"$install_dir/daemon" restart "$service_name"
 		wait_for_http
 		"$install_dir/daemon" stop "$service_name"
@@ -103,6 +157,8 @@ case "$phase" in
 		wait_for_http
 		"$install_dir/daemon" remove "$service_name"
 		[ ! -e "$service_path" ] || fail 'Buildroot S90 service script remains after remove'
+		[ ! -e "$pidfile" ] || fail 'Buildroot PID file remains after remove'
+		[ ! -e "$identityfile" ] || fail 'Buildroot identity file remains after remove'
 		log 'post-reboot checks passed'
 		;;
 	*)

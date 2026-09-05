@@ -13,11 +13,22 @@ The systemd lane verifies:
 - application argument and working-directory preservation;
 - `start`, `status`, `list`, `list -l`, `restart`, `stop`, and `remove`;
 - service startup after a guest reboot;
-- automatic restart after a nonzero application exit;
+- automatic restart after a nonzero application exit or direct `SIGKILL`;
 - graceful shutdown within the configured timeout;
 - forced termination after the configured timeout;
 - systemd control-group cleanup of a child process; and
 - removal of the unit, enablement links, metadata, and application processes.
+
+The Raspberry Pi OS lane runs that systemd lifecycle against both the official
+32-bit ARMHF and 64-bit ARM64 Raspberry Pi OS Lite images. It additionally
+asserts the guest bitness, mounts the image's real Pi firmware partition, and
+verifies service recovery after a direct `SIGKILL`.
+
+The Rocky Linux lane runs the systemd lifecycle on an official Rocky Linux 9
+GenericCloud image with SELinux Enforcing. It verifies the real risky-path
+warning and noninteractive refusal, safe installation from `/opt` without a
+warning bypass, persistent file labels, runtime process context, and absence of
+service-specific AVC denials.
 
 The OpenRC lane performs the same application-level lifecycle checks and also
 verifies its generated `openrc-run` script, `supervise-daemon` configuration,
@@ -39,12 +50,18 @@ graceful and forced shutdown, and removal.
 The OpenWrt lane verifies procd backend detection, generated `rc.common`
 scripts, boot enablement, respawn behavior, stop timeout handling, and removal.
 
+The Yocto lane boots the official Poky 5.0.19 Scarthgap LTS `qemuarm64`
+`core-image-minimal` image with SysVinit. It verifies runlevel registration,
+reboot persistence, explicit restart, configured-failure and direct `SIGKILL`
+watchdog recovery, graceful and forced process-group cleanup, and removal.
+
 The Buildroot backend is currently covered by package tests and an image-matrix
 builder for generating multiple Buildroot variants from source. A dedicated
 Buildroot libvirt guest runner can consume these generated images.
 
-The tests use immutable Ubuntu, Alpine, FreeBSD, and OpenWrt images with
-disposable overlays or copies. Base images are never modified.
+The tests use immutable Ubuntu, Rocky Linux, Raspberry Pi OS, Poky, Alpine,
+FreeBSD, and OpenWrt images with disposable overlays or copies. Base images are
+never modified.
 
 ## Ubuntu host prerequisites
 
@@ -54,7 +71,8 @@ Install the packages appropriate for the host architecture:
 sudo apt update
 sudo apt install libvirt-daemon-system libvirt-clients virtinst \
   cloud-image-utils qemu-utils qemu-system-x86 qemu-system-arm \
-  qemu-efi-aarch64 genisoimage e2fsprogs util-linux wget openssh-client
+  qemu-efi-aarch64 genisoimage e2fsprogs util-linux wget openssh-client \
+  cpio kmod mtools xz-utils
 sudo usermod -aG libvirt,kvm "$USER"
 ```
 
@@ -92,6 +110,148 @@ Go binaries, and creates a disposable guest.
 
 No application port is exposed to the host. HTTP assertions execute inside the
 guest against the test application's loopback listener.
+
+## Run the Rocky Linux lane
+
+The Rocky Linux lane targets the official Rocky Linux 9.8 GenericCloud Base
+image and keeps SELinux in Enforcing mode:
+
+```sh
+./integration_tests/rocky/run-libvirt.sh
+```
+
+The default guest architecture follows the host: x86-64 on x86-64 and ARM64 on
+AArch64. The image is verified against Rocky's per-image published SHA-256 and
+used through a disposable qcow2 overlay. The guest test does not install
+packages or weaken SELinux policy.
+
+In addition to the shared systemd lifecycle, the lane verifies:
+
+- SELinux is enabled and enforcing before and after reboot;
+- installing the temporary `/tmp/test-app` without `--ignore-warnings` prints
+  the SELinux warning, refuses the noninteractive install, and creates no unit
+  or metadata;
+- the root-owned `/opt/daemon-itest/test-app` installs without bypassing
+  warnings and runs successfully;
+- application, executable, unit, and metadata labels match policy and are not
+  `unlabeled_t`;
+- the live application process has a valid SELinux execution context; and
+- kernel and bounded audit-log checks contain no service-specific AVC denial.
+
+Rocky-specific settings are:
+
+| Environment variable | Default | Purpose |
+| --- | --- | --- |
+| `ROCKY_RELEASE` | `9.8` | Rocky Linux release embedded in the image filename |
+| `ROCKY_BUILD` | `20260525.0` | Version-pinned GenericCloud build |
+| `ROCKY_BASE_IMAGE` | Cached official image | Existing Rocky qcow2 image |
+| `ROCKY_BASE_IMAGE_SHA256` | Published checksum | Optional pinned image checksum |
+| `ROCKY_IMAGE_URL` | Official versioned image | Download source |
+| `ROCKY_IMAGE_CHECKSUM_URL` | Image URL plus `.CHECKSUM` | Published checksum source |
+| `VM_OS_VARIANT` | `rocky9` | libosinfo identifier |
+
+The shared `VM_ARCH`, `VM_MEMORY_MIB`, `VM_VCPUS`, `VM_DISK_GIB`,
+`VM_BOOT_TIMEOUT`, `VM_VIRT_TYPE`, `VM_NETWORK`, `LIBVIRT_URI`,
+`ARM_UEFI_CODE`, `ARM_UEFI_VARS`, `INTEGRATION_CACHE_DIR`,
+`INTEGRATION_ARTIFACT_DIR`, and `KEEP_VM` settings also apply. The default boot
+timeout is 900 seconds because SELinux initialization and reboot are slower
+under QEMU TCG.
+
+## Run the Raspberry Pi OS lane
+
+The Raspberry Pi OS lane defaults to both supported Pi userspace architectures:
+
+```sh
+./integration_tests/raspios/run-qemu.sh
+```
+
+It downloads the official Raspberry Pi OS Lite ARMHF and ARM64 images, verifies
+each image against Raspberry Pi's published SHA-256, and builds `GOARM=6` and
+ARM64 binaries respectively. For each image, it provisions a disposable raw
+copy, boots it, runs the full systemd application lifecycle, reboots it, and
+then tests configured-failure recovery, direct `SIGKILL` recovery, forced-stop
+cleanup, metadata cleanup, and removal.
+
+QEMU's Raspberry Pi machine models do not provide sufficiently complete and
+stable networking/reset behavior for this automated suite. The runner therefore
+uses an architecture-matched Debian Trixie kernel on QEMU `virt` hardware while
+retaining the official Raspberry Pi OS root filesystem, systemd services,
+libraries, configuration, cloud-init, and mounted `/boot/firmware` partition.
+The Debian kernel, initrd, and matching module packages are also checksum
+verified. Pi-specific peripherals and firmware behavior still require physical
+Raspberry Pi hardware.
+
+Run one architecture when needed:
+
+```sh
+RASPIOS_VARIANTS=armhf ./integration_tests/raspios/run-qemu.sh
+RASPIOS_VARIANTS=arm64 ./integration_tests/raspios/run-qemu.sh
+```
+
+Raspberry Pi OS-specific settings are:
+
+| Environment variable | Default | Purpose |
+| --- | --- | --- |
+| `RASPIOS_VARIANTS` | `armhf,arm64` | Comma-separated architectures to test |
+| `RASPIOS_RELEASE` | `2026-06-18` | Raspberry Pi OS image filename date |
+| `RASPIOS_IMAGE_RELEASE` | `2026-06-19` | Raspberry Pi download-directory date |
+| `RASPIOS_ARMHF_IMAGE` | Cached official image | Existing compressed ARMHF image |
+| `RASPIOS_ARMHF_IMAGE_URL` | Official Raspberry Pi URL | ARMHF download source |
+| `RASPIOS_ARMHF_IMAGE_SHA256` | Published checksum | Optional pinned ARMHF checksum |
+| `RASPIOS_ARM64_IMAGE` | Cached official image | Existing compressed ARM64 image |
+| `RASPIOS_ARM64_IMAGE_URL` | Official Raspberry Pi URL | ARM64 download source |
+| `RASPIOS_ARM64_IMAGE_SHA256` | Published checksum | Optional pinned ARM64 checksum |
+| `DEBIAN_RELEASE` | `trixie` | Generic boot-kernel and module release |
+| `RASPIOS_SSH_PORT` | `55222` | First host SSH forwarding port |
+| `QEMU_ACCEL` | `tcg` | QEMU accelerator |
+
+The shared `VM_MEMORY_MIB`, `VM_VCPUS`, `VM_BOOT_TIMEOUT`, `TEST_APP_PORT`,
+`INTEGRATION_CACHE_DIR`, `INTEGRATION_ARTIFACT_DIR`, `VM_WORK_DIR`, and
+`KEEP_VM` settings also apply. The variants run sequentially and need about
+8 GiB of free disk for downloads, one expanded image, and working files.
+
+## Run the Yocto/Poky lane
+
+The Yocto lane targets the official Poky 5.0.19 Scarthgap LTS ARM64 minimal
+image:
+
+```sh
+./integration_tests/yocto/run-qemu.sh
+```
+
+The runner verifies the official kernel and root filesystem against their
+published SHA-256 sidecars, copies and enlarges the 22 MiB ext4 image, and
+injects static ARM64 test binaries without mounting the filesystem. The stock
+minimal image has no SSH server, so a guest-side runlevel script performs the
+two-boot lifecycle, records a durable PASS or FAIL result, and powers off. The
+host extracts the result, serial log, and artifact archive directly from the
+stopped ext4 image.
+
+This lane uses Poky's native SysVinit environment without installing packages
+or adding compatibility wrappers. It validates the presence and behavior of
+the image's real `service`, `setsid`, BusyBox `wget`, runlevel scripts, and
+watchdog process. The test also uncovered and now covers portable SysV
+process-group signaling and graceful-exit races on BusyBox.
+
+Yocto-specific settings are:
+
+| Environment variable | Default | Purpose |
+| --- | --- | --- |
+| `YOCTO_RELEASE` | `5.0.19` | Scarthgap LTS release |
+| `YOCTO_IMAGE_BASE_URL` | Official qemuarm64 directory | Artifact source |
+| `YOCTO_KERNEL` | Cached official kernel | Existing kernel image |
+| `YOCTO_KERNEL_URL` | Official `Image-qemuarm64.bin` | Kernel source |
+| `YOCTO_KERNEL_SHA256` | Published checksum | Optional pinned kernel checksum |
+| `YOCTO_ROOTFS` | Cached official ext4 | Existing minimal rootfs |
+| `YOCTO_ROOTFS_URL` | Official minimal ext4 | Rootfs source |
+| `YOCTO_ROOTFS_SHA256` | Published checksum | Optional pinned rootfs checksum |
+| `YOCTO_ROOTFS_SIZE_MIB` | `256` | Expanded disposable ext4 size |
+| `QEMU_ACCEL` | Automatic | `kvm` on compatible ARM64 hosts, otherwise `tcg` |
+
+The shared `VM_MEMORY_MIB`, `VM_VCPUS`, `VM_BOOT_TIMEOUT`, `TEST_APP_PORT`,
+`INTEGRATION_CACHE_DIR`, `INTEGRATION_ARTIFACT_DIR`, `VM_WORK_DIR`, and
+`KEEP_VM` settings also apply. No libvirt network, cloud-init, SSH key, or UEFI
+firmware is required.
 
 ## Run the OpenRC lane
 
@@ -299,11 +459,16 @@ XML and available guest diagnostics. Guest diagnostics include:
 
 - generated systemd unit, OpenRC service script, FreeBSD rc.d script, or
   OpenWrt procd script;
+- SELinux enforcement state, file/process contexts, warning output, and scoped
+  audit/kernel AVC diagnostics for Rocky Linux;
 - native service-manager status and registration output;
 - journal entries where available;
 - process list;
 - HTTP response snapshots; and
 - JSON Lines lifecycle records from the test application.
+
+The Yocto lane additionally retains the full serial log, durable guest result,
+guest test log, and an artifact archive extracted offline from the ext4 image.
 
 The VM is removed even when a test fails unless `KEEP_VM=1` is set.
 

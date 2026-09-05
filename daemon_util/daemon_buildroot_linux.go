@@ -183,6 +183,7 @@ NAME={{shellQuote .Name}}
 DAEMON={{shellQuote .Path}}
 WORKING_DIRECTORY={{shellQuote .WorkingDirectory}}
 PIDFILE=/var/run/$NAME.pid
+IDENTITYFILE=${PIDFILE}.identity
 INIT_SCRIPT=/etc/init.d/S90{{.Name}}
 WATCHER_PIDFILE=${PIDFILE%.pid}.watchdog.pid
 STOP_TIMEOUT={{.StopTimeoutSeconds}}
@@ -194,6 +195,49 @@ read_pid() {
 		''|*[!0-9]*) return 1 ;;
 	esac
 	[ "$pid" -gt 1 ]
+}
+
+process_starttime() {
+	process_stat=$(cat "/proc/$1/stat") || return 1
+	process_after_name=${process_stat##*) }
+	[ "$process_after_name" != "$process_stat" ] || return 1
+	set -- $process_after_name
+	[ "$#" -ge 20 ] || return 1
+	[ "$1" != Z ] || return 1
+	shift 19
+	case "$1" in
+		''|*[!0-9]*) return 1 ;;
+	esac
+	printf '%s\n' "$1"
+}
+
+read_identity() {
+	[ -r "$IDENTITYFILE" ] || return 1
+	identity_pid=
+	identity_starttime=
+	identity_extra=
+	IFS=' ' read -r identity_pid identity_starttime identity_extra < "$IDENTITYFILE" || return 1
+	case "$identity_pid" in
+		''|*[!0-9]*) return 1 ;;
+	esac
+	case "$identity_starttime" in
+		''|*[!0-9]*) return 1 ;;
+	esac
+	[ "$identity_pid" -gt 1 ] && [ -z "$identity_extra" ] && [ "$identity_pid" = "$pid" ]
+}
+
+record_identity() {
+	read_pid || return 1
+	identity_starttime=$(process_starttime "$pid") || return 1
+	identity_tmp="${IDENTITYFILE}.$$"
+	if ! (umask 022; set -C; printf '%s %s\n' "$pid" "$identity_starttime" > "$identity_tmp") 2>/dev/null; then
+		rm -f "$identity_tmp"
+		return 1
+	fi
+	if ! mv -f "$identity_tmp" "$IDENTITYFILE"; then
+		rm -f "$identity_tmp"
+		return 1
+	fi
 }
 
 read_watcher_pid() {
@@ -303,12 +347,21 @@ disable_watcher() {
 	return 0
 }
 
-is_running() {
+is_expected_executable() {
 	read_pid && start-stop-daemon -K -t -q -p "$PIDFILE" -x "$DAEMON"
 }
 
-is_pid_running() {
-	read_pid && start-stop-daemon -K -t -q -p "$PIDFILE"
+is_running() {
+	read_pid || return 1
+	read_identity || return 1
+	current_starttime=$(process_starttime "$pid") || return 1
+	[ "$current_starttime" = "$identity_starttime" ]
+}
+
+signal_process() {
+	process_signal=$1
+	is_running || return 1
+	start-stop-daemon -K -q -s "$process_signal" -p "$PIDFILE"
 }
 
 start_app() {
@@ -317,20 +370,25 @@ start_app() {
 		echo "FAIL"
 		return 1
 	fi
-	if [ -f "$PIDFILE" ] && ! is_running; then
-		if read_pid && start-stop-daemon -K -t -q -p "$PIDFILE"; then
-			echo "FAIL"
-			return 1
+	if [ -f "$PIDFILE" ] || [ -f "$IDENTITYFILE" ]; then
+		if ! is_running; then
+			rm -f "$PIDFILE" "$IDENTITYFILE" || return 1
 		fi
-		rm -f "$PIDFILE" || return 1
 	fi
 	if start-stop-daemon -S -q -b -m \
 		-p "$PIDFILE" -x "$DAEMON" -- {{.Args}}; then
-		sleep 1
-		if is_running; then
+		if record_identity; then
+			sleep 1
+		fi
+		if is_expected_executable && is_running; then
 			echo "OK"
 		else
-			rm -f "$PIDFILE"
+			if read_pid; then
+				start-stop-daemon -K -q -s TERM -p "$PIDFILE" >/dev/null 2>&1 || true
+				sleep 1
+				start-stop-daemon -K -q -s KILL -p "$PIDFILE" >/dev/null 2>&1 || true
+			fi
+			rm -f "$PIDFILE" "$IDENTITYFILE"
 			echo "FAIL"
 			return 1
 		fi
@@ -357,28 +415,19 @@ stop() {
 		echo "FAIL"
 		return 1
 	fi
-	if ! read_pid; then
-		rm -f "$PIDFILE"
-		echo "OK"
-		return 0
-	fi
 	if ! is_running; then
-		if is_pid_running; then
-			echo "FAIL"
-			return 1
-		fi
-		rm -f "$PIDFILE"
+		rm -f "$PIDFILE" "$IDENTITYFILE"
 		echo "OK"
 		return 0
 	fi
-	if start-stop-daemon -K -q -p "$PIDFILE" -x "$DAEMON"; then
+	if signal_process TERM || ! is_running; then
 		elapsed=0
 		while is_running && [ "$elapsed" -lt "$STOP_TIMEOUT" ]; do
 			sleep 1
 			elapsed=$((elapsed + 1))
 		done
 		if is_running; then
-			if ! start-stop-daemon -K -q -s KILL -p "$PIDFILE" -x "$DAEMON"; then
+			if ! signal_process KILL && is_running; then
 				echo "FAIL"
 				return 1
 			fi
@@ -392,7 +441,7 @@ stop() {
 			echo "FAIL"
 			return 1
 		fi
-		rm -f "$PIDFILE"
+		rm -f "$PIDFILE" "$IDENTITYFILE"
 		echo "OK"
 	else
 		echo "FAIL"
@@ -405,11 +454,7 @@ do_status() {
 		echo "$NAME is running (pid $pid)"
 		return 0
 	fi
-	if is_pid_running; then
-		echo "$NAME is running (unverified pid $pid)"
-		return 0
-	fi
-	rm -f "$PIDFILE"
+	rm -f "$PIDFILE" "$IDENTITYFILE"
 	if ! read_watcher_pid || ! is_watcher_process; then
 		rm -f "$WATCHER_PIDFILE"
 	fi

@@ -140,6 +140,8 @@ name:
 On Linux, the current warning detects common risky paths and SELinux file
 contexts while SELinux is enforcing. This is an advisory heuristic; custom
 SELinux policy can permit or deny executable types differently.
+The integration suite exercises this behavior on Rocky Linux with SELinux
+Enforcing.
 
 ### Stop timeout
 
@@ -295,12 +297,12 @@ curl http://127.0.0.1:18080/healthz
 See [test_app/README.md](test_app/README.md) for argument, restart, and graceful
 shutdown test scenarios.
 
-Run the disposable QEMU/libvirt systemd, OpenRC, OpenWrt, and FreeBSD
+Run the disposable QEMU/libvirt systemd, Rocky Linux, Raspberry Pi OS, Yocto,
+OpenRC, Upstart, System V, Buildroot, OpenWrt, FreeBSD, and Windows
 application-level suites as documented in
 [integration_tests/README.md](integration_tests/README.md). They verify
 installation, boot persistence, restart behavior, stop-timeout escalation,
-process cleanup, and removal in real Ubuntu, Alpine, OpenWrt, and FreeBSD
-guests.
+process cleanup, and removal on real server and embedded operating systems.
 
 ## Architecture
 

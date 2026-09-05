@@ -257,6 +257,7 @@ working_directory={{shellQuote .WorkingDirectory}}
 
 proc="{{.Name}}"
 pidfile="/var/run/$proc.pid"
+identityfile="${pidfile}.identity"
 init_script=/etc/init.d/{{.Name}}
 watcher_pidfile=${pidfile%.pid}.watchdog.pid
 lockfile="/var/lock/subsys/$proc"
@@ -273,6 +274,49 @@ read_pid() {
 	[ "$pid" -gt 1 ]
 }
 
+process_starttime() {
+	process_stat=$(cat "/proc/$1/stat") || return 1
+	process_after_name=${process_stat##*) }
+	[ "$process_after_name" != "$process_stat" ] || return 1
+	set -- $process_after_name
+	[ "$#" -ge 20 ] || return 1
+	[ "$1" != Z ] || return 1
+	shift 19
+	case "$1" in
+		''|*[!0-9]*) return 1 ;;
+	esac
+	printf '%s\n' "$1"
+}
+
+read_identity() {
+	[ -r "$identityfile" ] || return 1
+	identity_pid=
+	identity_starttime=
+	identity_extra=
+	IFS=' ' read -r identity_pid identity_starttime identity_extra < "$identityfile" || return 1
+	case "$identity_pid" in
+		''|*[!0-9]*) return 1 ;;
+	esac
+	case "$identity_starttime" in
+		''|*[!0-9]*) return 1 ;;
+	esac
+	[ "$identity_pid" -gt 1 ] && [ -z "$identity_extra" ] && [ "$identity_pid" = "$pid" ]
+}
+
+record_identity() {
+	read_pid || return 1
+	identity_starttime=$(process_starttime "$pid") || return 1
+	identity_tmp="${identityfile}.$$"
+	if ! (umask 022; set -C; printf '%s %s\n' "$pid" "$identity_starttime" > "$identity_tmp") 2>/dev/null; then
+		rm -f "$identity_tmp"
+		return 1
+	fi
+	if ! mv -f "$identity_tmp" "$identityfile"; then
+		rm -f "$identity_tmp"
+		return 1
+	fi
+}
+
 read_watcher_pid() {
 	[ -r "$watcher_pidfile" ] || return 1
 	watcher_pid=$(cat "$watcher_pidfile")
@@ -282,13 +326,48 @@ read_watcher_pid() {
 	[ "$watcher_pid" -gt 1 ]
 }
 
-is_expected_process() {
+is_expected_executable() {
 	read_pid || return 1
 	[ "$exec" -ef "/proc/$pid/exe" ]
 }
 
+is_expected_process() {
+	read_pid || return 1
+	read_identity || return 1
+	current_starttime=$(process_starttime "$pid") || return 1
+	[ "$current_starttime" = "$identity_starttime" ]
+}
+
+process_group_members() {
+	for process_stat in /proc/[0-9]*/stat; do
+		[ -r "$process_stat" ] || continue
+		process_status=$(cat "$process_stat") || continue
+		process_after_name=${process_status##*) }
+		[ "$process_after_name" != "$process_status" ] || continue
+		set -- $process_after_name
+		[ "$#" -ge 3 ] || continue
+		if [ "$3" = "$target_pid" ] && [ "$1" != Z ]; then
+			process_pid=${process_stat%/stat}
+			printf '%s\n' "${process_pid##*/}"
+		fi
+	done
+}
+
 is_process_group_running() {
-	kill -0 -- "-$target_pid" 2>/dev/null
+	[ -n "$(process_group_members)" ]
+}
+
+signal_process_group() {
+	group_signal=$1
+	group_members=$(process_group_members)
+	[ -n "$group_members" ] || return 1
+	group_signaled=1
+	for process_pid in $group_members; do
+		if kill "-$group_signal" "$process_pid" 2>/dev/null; then
+			group_signaled=0
+		fi
+	done
+	return "$group_signaled"
 }
 
 is_watcher_process() {
@@ -394,15 +473,9 @@ start_app() {
 	command -v setsid >/dev/null 2>&1 || exit 5
 	cd "$working_directory" || exit 5
 
-	if [ -f "$pidfile" ]; then
-		if ! read_pid; then
-			rm -f "$pidfile" "$lockfile"
-		elif ! is_expected_process; then
-			if kill -0 "$pid" 2>/dev/null; then
-				printf '%s still exists...\n' "$pidfile"
-				return 7
-			fi
-			rm -f "$pidfile" "$lockfile"
+	if [ -f "$pidfile" ] || [ -f "$identityfile" ]; then
+		if ! is_expected_process; then
+			rm -f "$pidfile" "$identityfile" "$lockfile"
 		fi
 	fi
 
@@ -411,22 +484,30 @@ start_app() {
 		setsid "$exec" {{.Args}} >/dev/null 2>&1 &
 		pid=$!
 		if ! printf '%s\n' "$pid" > "$pidfile"; then
-			kill -TERM -- "-$pid" 2>/dev/null
+			target_pid=$pid
+			signal_process_group TERM >/dev/null 2>&1 || true
 			sleep 1
-			kill -KILL -- "-$pid" 2>/dev/null
+			signal_process_group KILL >/dev/null 2>&1 || true
 			wait "$pid" 2>/dev/null
+			rm -f "$identityfile"
 			echo "FAIL"
 			return 1
 		fi
-		sleep 1
-		if is_expected_process; then
+		if record_identity; then
+			sleep 1
+		fi
+		if is_expected_executable && is_expected_process; then
 			touch "$lockfile"
 			echo "OK"
 		else
+			target_pid=$pid
+			signal_process_group TERM >/dev/null 2>&1 || true
+			sleep 1
+			signal_process_group KILL >/dev/null 2>&1 || true
 			wait "$pid"
 			retval=$?
 			[ "$retval" -ne 0 ] || retval=1
-			rm -f "$pidfile" "$lockfile"
+			rm -f "$pidfile" "$identityfile" "$lockfile"
 			echo "FAIL"
 			return "$retval"
 		fi
@@ -455,22 +536,13 @@ stop() {
 		echo "FAIL"
 		return 1
 	fi
-	if ! read_pid; then
-		rm -f "$pidfile" "$lockfile"
-		echo "OK"
-		return 0
-	fi
-	if ! kill -0 "$pid" 2>/dev/null; then
-		rm -f "$pidfile" "$lockfile"
-		echo "OK"
-		return 0
-	fi
 	if ! is_expected_process; then
-		echo "FAIL"
-		return 1
+		rm -f "$pidfile" "$identityfile" "$lockfile"
+		echo "OK"
+		return 0
 	fi
 	target_pid=$pid
-	if ! kill -TERM -- "-$target_pid" 2>/dev/null; then
+	if ! signal_process_group TERM && is_process_group_running; then
 		echo "FAIL"
 		return 1
 	fi
@@ -480,9 +552,11 @@ stop() {
 		sleep 1
 		elapsed=$((elapsed + 1))
 	done
-	if is_process_group_running && ! kill -KILL -- "-$target_pid" 2>/dev/null; then
-		echo "FAIL"
-		return 1
+	if is_process_group_running; then
+		if ! signal_process_group KILL && is_process_group_running; then
+			echo "FAIL"
+			return 1
+		fi
 	fi
 	force_elapsed=0
 	while is_process_group_running && [ "$force_elapsed" -lt 5 ]; do
@@ -493,7 +567,7 @@ stop() {
 		echo "FAIL"
 		return 1
 	fi
-	rm -f "$pidfile" "$lockfile"
+	rm -f "$pidfile" "$identityfile" "$lockfile"
 	echo "OK"
 	return 0
 }

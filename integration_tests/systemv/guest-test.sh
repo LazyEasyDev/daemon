@@ -12,6 +12,7 @@ registration_name="lz_lz_${service_name}"
 service_path="/etc/init.d/$registration_name"
 metadata_path="/var/lib/daemon-util/services/${registration_name}.json"
 pidfile="/var/run/${registration_name}.pid"
+identityfile="${pidfile}.identity"
 watcher_pidfile="/var/run/${registration_name}.watchdog.pid"
 lockfile="/var/lock/subsys/$registration_name"
 state_dir="/var/tmp/daemon-itest-$service_name"
@@ -47,7 +48,9 @@ assert_file_contains() {
 
 process_is_test_app() {
 	local pid=$1
-	[[ -e "/proc/$pid/exe" ]] && [[ "$(readlink "/proc/$pid/exe" 2>/dev/null || true)" == "$app_bin" ]]
+	local executable
+	executable=$(readlink "/proc/$pid/exe" 2>/dev/null || true)
+	[[ "$executable" == "$app_bin" || "$executable" == "$app_bin (deleted)" ]]
 }
 
 wait_process_gone() {
@@ -65,7 +68,7 @@ assert_no_test_app_processes() {
 	local process executable
 	for process in /proc/[0-9]*; do
 		executable=$(readlink "$process/exe" 2>/dev/null || true)
-		if [[ "$executable" == "$app_bin" ]]; then
+		if [[ "$executable" == "$app_bin" || "$executable" == "$app_bin (deleted)" ]]; then
 			fail "test application process ${process##*/} leaked after cleanup"
 		fi
 	done
@@ -240,7 +243,7 @@ collect_artifacts() {
 	if [[ -f "$service_path" ]]; then
 		cp -f "$service_path" "$artifact_dir/${label}-service-script"
 	fi
-	for path in "$pidfile" "$watcher_pidfile"; do
+	for path in "$pidfile" "$identityfile" "$watcher_pidfile"; do
 		if [[ -r "$path" ]]; then
 			cp -f "$path" "$artifact_dir/${label}-$(basename "$path")"
 		fi
@@ -261,7 +264,7 @@ cleanup_service() {
 			rm -f "$service_path"
 		}
 	fi
-	rm -f "$metadata_path" "$pidfile" "$watcher_pidfile" "$lockfile"
+	rm -f "$metadata_path" "$pidfile" "$identityfile" "$watcher_pidfile" "$lockfile"
 }
 
 on_exit() {
@@ -318,10 +321,12 @@ verify_definition() {
 	assert_file_contains "$service_path" "exec='$app_bin'"
 	assert_file_contains "$service_path" "working_directory='$install_dir'"
 	assert_file_contains "$service_path" "pidfile=\"/var/run/\$proc.pid\""
+	assert_file_contains "$service_path" 'identityfile="${pidfile}.identity"'
+	assert_file_contains "$service_path" 'current_starttime=$(process_starttime "$pid")'
 	assert_file_contains "$service_path" "watcher_pidfile=\${pidfile%.pid}.watchdog.pid"
 	assert_file_contains "$service_path" "setsid \"\$exec\""
-	assert_file_contains "$service_path" "kill -TERM -- \"-\$target_pid\""
-	assert_file_contains "$service_path" "kill -KILL -- \"-\$target_pid\""
+	assert_file_contains "$service_path" 'signal_process_group TERM'
+	assert_file_contains "$service_path" 'signal_process_group KILL'
 	verify_links_present
 }
 
@@ -364,6 +369,7 @@ pre_reboot() {
 post_reboot() {
 	local boot_events="$install_dir/boot-events.jsonl"
 	local restart_parent restart_child new_parent
+	local hot_parent hot_new_parent hot_identity replacement
 	local graceful_started graceful_elapsed
 	local auto_events="$install_dir/restart-events.jsonl"
 	local forced_events="$install_dir/forced-events.jsonl"
@@ -390,6 +396,29 @@ post_reboot() {
 	wait_process_gone "$restart_child"
 	assert_event "$boot_events" signal
 	assert_event "$boot_events" stopped
+
+	current_scenario=hot-replacement
+	log "verifying status and stop after atomic executable replacement"
+	hot_parent=$(http_pid)
+	hot_identity=$(cat "$identityfile")
+	[[ "$hot_identity" == "$hot_parent "* ]] || fail "identity file does not belong to PID $hot_parent"
+	replacement="$install_dir/.test-app.replacement.$$"
+	cp -p "$app_bin" "$replacement"
+	mv -f "$replacement" "$app_bin"
+	[[ "$(readlink "/proc/$hot_parent/exe" 2>/dev/null || true)" == "$app_bin (deleted)" ]] || fail "running executable was not atomically replaced"
+	sleep 2
+	[[ "$(http_pid)" == "$hot_parent" ]] || fail "watchdog restarted the application after hot replacement"
+	[[ "$(cat "$identityfile")" == "$hot_identity" ]] || fail "process identity changed after hot replacement"
+	assert_contains "$("$daemon_bin" status "$service_name")" 'running' 'status after hot replacement'
+	"$daemon_bin" stop "$service_name"
+	wait_process_gone "$hot_parent"
+	[[ ! -e "$pidfile" ]] || fail "application PID file remains after hot-replacement stop"
+	[[ ! -e "$identityfile" ]] || fail "application identity file remains after hot-replacement stop"
+	"$daemon_bin" start "$service_name"
+	wait_for_http true >"$state_dir/hot-replacement-http.json"
+	hot_new_parent=$(http_pid)
+	[[ "$hot_new_parent" != "$hot_parent" ]] || fail "hot-replacement restart reused PID $hot_parent"
+	[[ "$(cat "$identityfile")" == "$hot_new_parent "* ]] || fail "new application identity was not recorded"
 
 	current_scenario=graceful-stop
 	graceful_started=$(date +%s)
@@ -445,6 +474,7 @@ post_reboot() {
 	[[ ! -e "$service_path" ]] || fail "init script remains after final removal"
 	[[ ! -e "$metadata_path" ]] || fail "metadata remains after final removal"
 	[[ ! -e "$pidfile" ]] || fail "application PID file remains after final removal"
+	[[ ! -e "$identityfile" ]] || fail "application identity file remains after final removal"
 	[[ ! -e "$watcher_pidfile" ]] || fail "watchdog PID file remains after final removal"
 	verify_links_absent
 	assert_no_test_app_processes

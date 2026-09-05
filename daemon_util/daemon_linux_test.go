@@ -400,18 +400,67 @@ func TestOpenWrtStatusActive(t *testing.T) {
 	}
 }
 
-func TestBuildrootValidatesProcessBeforeSignals(t *testing.T) {
+func TestGeneratedLinuxInitUsesPIDStarttimeIdentity(t *testing.T) {
+	tests := []struct {
+		name         string
+		source       string
+		identityFile string
+		pidFile      string
+	}{
+		{name: "Buildroot", source: defaultBuildrootConfig, identityFile: `IDENTITYFILE=${PIDFILE}.identity`, pidFile: "$PIDFILE"},
+		{name: "System V", source: defaultSystemVConfig, identityFile: `identityfile="${pidfile}.identity"`, pidFile: "$pidfile"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for _, setting := range []string{
+				test.identityFile,
+				`process_starttime() {`,
+				`process_after_name=${process_stat##*) }`,
+				`[ "$#" -ge 20 ] || return 1`,
+				`[ "$1" != Z ] || return 1`,
+				`shift 19`,
+				`read_identity() {`,
+				`record_identity() {`,
+				`printf '%s %s\n' "$pid" "$identity_starttime"`,
+				`current_starttime=$(process_starttime "$pid")`,
+				`[ "$current_starttime" = "$identity_starttime" ]`,
+			} {
+				if !strings.Contains(test.source, setting) {
+					t.Fatalf("template does not contain %q", setting)
+				}
+			}
+			if strings.Contains(test.source, `printf '%s %s\n' "$pid" "$identity_starttime" > `+test.pidFile) {
+				t.Fatal("template stores the start time in the numeric PID file")
+			}
+		})
+	}
+}
+
+func TestBuildrootValidatesIdentityBeforeSignals(t *testing.T) {
 	for _, command := range []string{
+		`is_expected_executable() {`,
 		`start-stop-daemon -K -t -q -p "$PIDFILE" -x "$DAEMON"`,
-		`start-stop-daemon -K -q -s KILL -p "$PIDFILE" -x "$DAEMON"`,
+		`signal_process() {`,
+		`is_running || return 1`,
+		`start-stop-daemon -K -q -s "$process_signal" -p "$PIDFILE"`,
+		`signal_process TERM`,
+		`signal_process KILL`,
 	} {
 		if !strings.Contains(defaultBuildrootConfig, command) {
 			t.Fatalf("Buildroot config does not contain %q", command)
 		}
 	}
-	for _, command := range []string{`kill -0 "$pid"`, `kill -KILL "$pid"`} {
+	for _, command := range []string{
+		`start-stop-daemon -K -q -p "$PIDFILE" -x "$DAEMON"`,
+		`start-stop-daemon -K -q -s KILL -p "$PIDFILE" -x "$DAEMON"`,
+		`is_pid_running() {`,
+		`running (unverified pid`,
+		`kill -0 "$pid"`,
+		`kill -KILL "$pid"`,
+	} {
 		if strings.Contains(defaultBuildrootConfig, command) {
-			t.Fatalf("Buildroot config still contains raw PID operation %q", command)
+			t.Fatalf("Buildroot config still contains obsolete process check %q", command)
 		}
 	}
 }
@@ -424,6 +473,7 @@ func TestLinuxWatcherTemplatesSuperviseApplications(t *testing.T) {
 	}{
 		{name: "Buildroot", source: defaultBuildrootConfig, wants: []string{
 			`PIDFILE=/var/run/$NAME.pid`,
+			`IDENTITYFILE=${PIDFILE}.identity`,
 			`INIT_SCRIPT=/etc/init.d/S90{{.Name}}`,
 			`WATCHER_PIDFILE=${PIDFILE%.pid}.watchdog.pid`,
 			`(umask 022; set -C; printf '%s\n' "$$" > "$WATCHER_PIDFILE")`,
@@ -439,11 +489,12 @@ func TestLinuxWatcherTemplatesSuperviseApplications(t *testing.T) {
 			`if ! start_watcher; then`,
 			`Warning: $NAME watcher could not start`,
 			`if ! disable_watcher; then`,
-			"rm -f \"$PIDFILE\"\n\tif ! read_watcher_pid || ! is_watcher_process; then\n\t\trm -f \"$WATCHER_PIDFILE\"\n\tfi\n\techo \"$NAME is stopped\"\n\treturn 3",
+			"rm -f \"$PIDFILE\" \"$IDENTITYFILE\"\n\tif ! read_watcher_pid || ! is_watcher_process; then\n\t\trm -f \"$WATCHER_PIDFILE\"\n\tfi\n\techo \"$NAME is stopped\"\n\treturn 3",
 			"unwatch)\n\t\tdisable_watcher",
 		}},
 		{name: "System V", source: defaultSystemVConfig, wants: []string{
 			`pidfile="/var/run/$proc.pid"`,
+			`identityfile="${pidfile}.identity"`,
 			`init_script=/etc/init.d/{{.Name}}`,
 			`watcher_pidfile=${pidfile%.pid}.watchdog.pid`,
 			`(umask 022; set -C; printf '%s\n' "$$" > "$watcher_pidfile")`,
@@ -478,7 +529,7 @@ func TestLinuxWatcherTemplatesSuperviseApplications(t *testing.T) {
 			}
 			applicationStop := strings.Index(test.source[disableWatcher:], `if ! is_running; then`)
 			if test.name == "System V" {
-				applicationStop = strings.Index(test.source[disableWatcher:], `if ! read_pid; then`)
+				applicationStop = strings.Index(test.source[disableWatcher:], `if ! is_expected_process; then`)
 			}
 			if applicationStop < 0 {
 				t.Fatal("template watcher control flow is incomplete")
@@ -537,14 +588,29 @@ func TestLinuxWatcherIdentityPrecedesSignal(t *testing.T) {
 func TestSystemVValidatesProcessBeforeSignals(t *testing.T) {
 	for _, command := range []string{
 		`[ "$pid" -gt 1 ]`,
+		`identityfile="${pidfile}.identity"`,
+		`process_starttime() {`,
+		`shift 19`,
+		`read_identity() {`,
+		`record_identity() {`,
+		`is_expected_executable() {`,
 		`[ "$exec" -ef "/proc/$pid/exe" ]`,
+		`if record_identity; then`,
+		`if is_expected_executable && is_expected_process; then`,
+		`[ "$current_starttime" = "$identity_starttime" ]`,
 		`if ! is_expected_process; then`,
 		`setsid "$exec"`,
 		`if ! printf '%s\n' "$pid" > "$pidfile"; then`,
-		`kill -TERM -- "-$pid"`,
 		`target_pid=$pid`,
-		`kill -TERM -- "-$target_pid"`,
-		`if is_process_group_running && ! kill -KILL -- "-$target_pid"`,
+		`process_group_members() {`,
+		`for process_stat in /proc/[0-9]*/stat; do`,
+		`process_after_name=${process_status##*) }`,
+		`[ "$3" = "$target_pid" ] && [ "$1" != Z ]`,
+		`[ -n "$(process_group_members)" ]`,
+		`signal_process_group() {`,
+		`kill "-$group_signal" "$process_pid"`,
+		`signal_process_group TERM`,
+		`signal_process_group KILL`,
 		`while is_process_group_running && [ "$elapsed" -lt "$stop_timeout" ]`,
 	} {
 		if !strings.Contains(defaultSystemVConfig, command) {
@@ -557,8 +623,22 @@ func TestSystemVValidatesProcessBeforeSignals(t *testing.T) {
 	if strings.Contains(defaultSystemVConfig, `kill -KILL "$pid"`) {
 		t.Fatal("System V stop still kills only the main process")
 	}
+	if strings.Contains(defaultSystemVConfig, `kill -TERM -- "-$pid"`) || strings.Contains(defaultSystemVConfig, `kill -KILL -- "-$pid"`) {
+		t.Fatal("System V startup rollback still uses non-portable negative process-group signaling")
+	}
 	if strings.Contains(defaultSystemVConfig, `/proc/$pid/cmdline`) {
 		t.Fatal("System V config still contains script-specific process matching")
+	}
+	identityStart := strings.Index(defaultSystemVConfig, "is_expected_process() {")
+	if identityStart < 0 {
+		t.Fatal("System V process identity function is missing")
+	}
+	identityEnd := strings.Index(defaultSystemVConfig[identityStart:], "\n}\n")
+	if identityEnd < 0 {
+		t.Fatal("System V process identity function is incomplete")
+	}
+	if strings.Contains(defaultSystemVConfig[identityStart:identityStart+identityEnd], `/proc/$pid/exe`) {
+		t.Fatal("System V ongoing process identity still depends on the executable inode")
 	}
 }
 

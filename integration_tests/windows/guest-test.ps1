@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("pre-reboot", "post-reboot", "cleanup")]
+    [ValidateSet("pre-reboot", "hot-replacement", "post-reboot", "cleanup")]
     [string]$Phase,
     [Parameter(Mandatory = $true)]
     [string]$ServiceName,
@@ -71,6 +71,31 @@ function Wait-NewPid([int]$OldPid, [int]$TimeoutSeconds = 120) {
         Start-Sleep -Seconds 2
     }
     throw "application did not restart from PID $OldPid"
+}
+
+function Wait-AppProcessGone([int]$ProcessId, [int]$TimeoutSeconds = 60) {
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        $process = Get-CimInstance Win32_Process -Filter "ProcessId=$ProcessId" -ErrorAction SilentlyContinue
+        if ($null -eq $process) {
+            return
+        }
+        Start-Sleep -Seconds 1
+    }
+    throw "application PID $ProcessId did not exit"
+}
+
+function Assert-SharingViolation([object]$ErrorRecord) {
+    $exception = $ErrorRecord.Exception
+    if ($null -ne $exception.InnerException) {
+        $exception = $exception.InnerException
+    }
+    $nativeCode = $exception.HResult -band 0xFFFF
+    $message = $ErrorRecord | Out-String
+    Assert-True (
+        $nativeCode -eq 32 -or
+        $message -match "sharing violation|used by another process|0x80070020"
+    ) "running executable replacement failed unexpectedly: $message"
 }
 
 function Get-EventCount([string]$Path, [string]$EventName) {
@@ -168,6 +193,74 @@ switch ($Phase) {
         $response | ConvertTo-Json -Depth 8 | Out-File (Join-Path $ArtifactDir "pre-reboot-http.json")
         Save-Artifacts "pre-reboot"
         Write-TestLog "pre-reboot app checks passed with PID $($response.pid)"
+    }
+    "hot-replacement" {
+        Write-TestLog "testing replacement of the running application image"
+        $Replacement = Join-Path $InstallDir "test-app-replacement.exe"
+        $Backup = Join-Path $InstallDir "test-app-hot-replacement-backup.exe"
+        Assert-True (Test-Path $Replacement) "replacement executable is missing"
+        Remove-Item $Backup -Force -ErrorAction SilentlyContinue
+
+        $response = Wait-App
+        $oldPid = [int]$response.pid
+        $originalHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $App).Hash
+        $originalTime = (Get-Item -LiteralPath $App).LastWriteTimeUtc
+        $replacementHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Replacement).Hash
+        Assert-True ($replacementHash -ne $originalHash) "replacement executable is not distinguishable from the original"
+
+        $runningReplaceSucceeded = $false
+        $runningReplaceError = $null
+        try {
+            [System.IO.File]::Replace($Replacement, $App, $Backup, $true)
+            $runningReplaceSucceeded = $true
+        } catch {
+            $runningReplaceError = $_
+        }
+
+        if ($runningReplaceSucceeded) {
+            $targetHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $App).Hash
+            Assert-True ($targetHash -eq $replacementHash) "live replacement target hash does not match the candidate"
+            $result = "live-replacement-succeeded"
+        } else {
+            Assert-SharingViolation $runningReplaceError
+            $targetHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $App).Hash
+            $targetTime = (Get-Item -LiteralPath $App).LastWriteTimeUtc
+            Assert-True ($targetHash -eq $originalHash) "target changed after the expected sharing violation"
+            Assert-True ($targetTime -eq $originalTime) "target timestamp changed after the expected sharing violation"
+            $result = "expected-sharing-violation"
+        }
+
+        $runningResponse = Wait-App
+        Assert-True ([int]$runningResponse.pid -eq $oldPid) "application PID changed during running-image replacement"
+        Verify-ManagementCommands
+
+        Invoke-Daemon @("stop", $ServiceName)
+        Wait-AppProcessGone $oldPid
+        if (-not $runningReplaceSucceeded) {
+            Remove-Item $Backup -Force -ErrorAction SilentlyContinue
+            [System.IO.File]::Replace($Replacement, $App, $Backup, $true)
+        }
+        $installedHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $App).Hash
+        Assert-True ($installedHash -eq $replacementHash) "target executable does not contain the replacement after stop"
+        Remove-Item $Backup -Force -ErrorAction SilentlyContinue
+
+        Invoke-Daemon @("start", $ServiceName)
+        $newResponse = Wait-App
+        $newPid = [int]$newResponse.pid
+        Assert-True ($newPid -ne $oldPid) "replacement start reused old PID $oldPid"
+        Verify-ManagementCommands
+
+        [pscustomobject]@{
+            running_operation = $result
+            original_hash = $originalHash
+            replacement_hash = $replacementHash
+            installed_hash = $installedHash
+            old_pid = $oldPid
+            new_pid = $newPid
+        } | ConvertTo-Json -Depth 5 | Out-File (Join-Path $ArtifactDir "hot-replacement.json")
+        $newResponse | ConvertTo-Json -Depth 8 | Out-File (Join-Path $ArtifactDir "hot-replacement-http.json")
+        Save-Artifacts "hot-replacement"
+        Write-TestLog "hot replacement result '$result'; replacement start changed PID $oldPid to $newPid"
     }
     "post-reboot" {
         Write-TestLog "verifying reboot auto-start"

@@ -77,6 +77,13 @@ event_count() {
 	grep -Fc "\"event\":\"$1\"" "$events" 2>/dev/null || true
 }
 
+verify_management_commands() {
+	"$install_dir/daemon" status "$service_name" | grep -qi running || fail 'daemon status does not report running'
+	"$install_dir/daemon" list | grep -Fq "$service_name" || fail 'daemon list does not contain the service'
+	"$install_dir/daemon" list | grep -Fq "$app" || fail 'daemon list does not contain the application path'
+	"$install_dir/daemon" list -l | grep -Fq 'hello buildroot' || fail 'daemon long list does not contain application arguments'
+}
+
 require_buildroot() {
 	grep -F '/etc/init.d/S??*' /etc/init.d/rcS >/dev/null || fail 'Buildroot rcS startup pattern is missing'
 	command -v start-stop-daemon >/dev/null || fail 'start-stop-daemon is missing'
@@ -134,7 +141,7 @@ case "$phase" in
 		sleep 2
 		[ "$(http_pid)" = "$old_pid" ] || fail 'watchdog restarted the application after hot replacement'
 		[ "$(cat "$identityfile")" = "$identity_before" ] || fail 'process identity changed after hot replacement'
-		"$install_dir/daemon" status "$service_name" | grep -qi running || fail 'status does not report running after hot replacement'
+		verify_management_commands
 		"$install_dir/daemon" stop "$service_name"
 		wait_process_gone "$old_pid"
 		[ ! -e "$pidfile" ] || fail 'PID file remains after hot-replacement stop'
@@ -147,6 +154,7 @@ case "$phase" in
 			"$new_pid "*) ;;
 			*) fail 'new application identity was not recorded' ;;
 		esac
+		verify_management_commands
 		restart_pid=$new_pid
 		restart_started=$(date +%s)
 		"$service_path" restart

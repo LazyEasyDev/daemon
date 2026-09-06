@@ -83,7 +83,7 @@ verify_compressed_image() {
 	if [[ -z "$expected" ]]; then
 		local checksums="$work_dir/sha256sums"
 		wget -qO "$checksums" "${image_url%/"$image_filename"}/sha256sums"
-		expected=$(awk -v file="$image_filename" '$2 == file {print $1; exit}' "$checksums")
+		expected=$(awk -v file="$image_filename" '{name=$2; sub(/^\*/, "", name); if (name == file) {print $1; exit}}' "$checksums")
 	fi
 	[[ -n "$expected" ]] || fail "could not obtain the OpenWrt image SHA-256 checksum"
 	printf '%s  %s\n' "$expected" "$image" | sha256sum --check --status - || fail "OpenWrt compressed image failed SHA-256 verification"

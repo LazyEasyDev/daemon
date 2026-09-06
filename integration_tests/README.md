@@ -4,6 +4,12 @@ These tests boot disposable virtual machines and exercise daemon-util through a
 real operating-system service manager. They complement `go test ./...`; they do
 not replace the package-level tests.
 
+Every live backend lane includes an executable hot-replacement scenario. Unix
+guests atomically rename a replacement over the running executable, verify that
+the original PID and service status remain stable, stop the old image, and
+confirm the next start uses a new PID. Windows Server verifies the corresponding
+NTFS/SCM behavior with distinct binary hashes and a replacement-backed restart.
+
 ## Current coverage
 
 The systemd lane verifies:
@@ -14,6 +20,7 @@ The systemd lane verifies:
 - `start`, `status`, `list`, `list -l`, `restart`, `stop`, and `remove`;
 - service startup after a guest reboot;
 - automatic restart after a nonzero application exit or direct `SIGKILL`;
+- atomic executable replacement with unchanged running PID and replacement-backed restart;
 - graceful shutdown within the configured timeout;
 - forced termination after the configured timeout;
 - systemd control-group cleanup of a child process; and
@@ -32,7 +39,8 @@ service-specific AVC denials.
 
 The OpenRC lane performs the same application-level lifecycle checks and also
 verifies its generated `openrc-run` script, `supervise-daemon` configuration,
-default-runlevel registration, respawn behavior, and process-group cleanup.
+default-runlevel registration, respawn behavior, process-group cleanup, and
+atomic executable replacement.
 
 The Gentoo lane runs those OpenRC checks against an official ARM64 Gentoo
 OpenRC stage3. It uses serial-only direct QEMU boot, verifies the published
@@ -41,19 +49,22 @@ cloud-init, SSH, or online package installation.
 
 The Upstart lane boots Ubuntu 14.04 LTS with Upstart as PID 1 and verifies the
 generated job definition, boot auto-start, explicit restart, graceful stop,
-configured-failure respawn, hard-crash respawn, and complete removal.
+configured-failure respawn, hard-crash respawn, atomic executable replacement,
+and complete removal.
 
 The Windows lane installs Windows Server 2019 Evaluation Server Core and
 verifies SCM registration, automatic startup, recovery actions, external HTTP
 behavior, configured-failure and hard-crash recovery, reboot persistence,
-stop/start behavior, metadata cleanup, and service removal.
+running-image replacement with hash verification, stop/start behavior, metadata
+cleanup, and service removal.
 
 The FreeBSD lane verifies the rc.d backend, `/usr/sbin/daemon` supervision,
 supervisor and application PID files, boot enablement, restart behavior,
-graceful and forced shutdown, and removal.
+atomic executable replacement, graceful and forced shutdown, and removal.
 
 The OpenWrt lane verifies procd backend detection, generated `rc.common`
-scripts, boot enablement, respawn behavior, stop timeout handling, and removal.
+scripts, boot enablement, respawn behavior, atomic executable replacement, stop
+timeout handling, and removal.
 
 The Yocto lane boots the official Poky 5.0.19 Scarthgap LTS `qemuarm64`
 `core-image-minimal` image with SysVinit. It verifies runlevel registration,
@@ -68,7 +79,8 @@ status, stop, and removal.
 The runit lane boots the official Void Linux ARM64 root filesystem with native
 runit as PID 1. It verifies backend precedence, service supervision, reboot
 persistence, explicit restart, configured-failure and hard-crash recovery,
-graceful and forced process-group cleanup, and removal.
+atomic executable replacement, graceful and forced process-group cleanup, and
+removal.
 
 The tests use immutable Ubuntu, Rocky Linux, Raspberry Pi OS, Poky, Alpine,
 Gentoo stage3, Void Linux rootfs, FreeBSD, and OpenWrt artifacts with disposable
@@ -413,6 +425,14 @@ performs one unattended Server Core installation. Later runs use a disposable
 qcow2 overlay backed by the cached clean base disk. The test communicates with
 the guest through WinRM and forwards the application's HTTP endpoint to the
 host for external assertions.
+
+The runner builds a second application binary with a distinct PE hash and uses
+same-volume `File.Replace` while the original process is running. It accepts and
+records either valid Windows result: a successful live replacement or an
+expected sharing violation with an unchanged target. It then stops the service,
+ensures the replacement hash is installed, starts the service, and verifies a
+new application PID plus healthy SCM/status/list behavior. Windows Server 2019
+currently permits the live replacement in this test configuration.
 
 Windows Server 2019 is x86-64-only. On an ARM64 host the runner extracts Ubuntu's
 `qemu-system-x86` and WinRM client packages into `/var/tmp` without sudo, then

@@ -261,6 +261,31 @@ post_reboot() {
 	assert_event "$boot_events" signal
 	assert_event "$boot_events" stopped
 
+	current_scenario=hot-replacement
+	log "verifying status, list, and stop after atomic executable replacement"
+	hot_parent=$(http_pid)
+	hot_supervisor=$(cat "$supervisor_pidfile")
+	hot_child_record=$(cat "$child_pidfile")
+	hot_inode=$(stat -f '%i' "$app_bin")
+	replacement="$install_dir/.test-app.replacement.$$"
+	cp -p "$app_bin" "$replacement"
+	mv -f "$replacement" "$app_bin"
+	[ "$(stat -f '%i' "$app_bin")" != "$hot_inode" ] || fail "application inode did not change during atomic replacement"
+	sleep 2
+	[ "$(http_pid)" = "$hot_parent" ] || fail "FreeBSD daemon supervisor restarted the application after hot replacement"
+	[ "$(cat "$supervisor_pidfile")" = "$hot_supervisor" ] || fail "supervisor PID changed after hot replacement"
+	[ "$(cat "$child_pidfile")" = "$hot_child_record" ] || fail "application PID file changed after hot replacement"
+	verify_management_commands
+	"$daemon_bin" stop "$service_name"
+	wait_process_gone "$hot_parent"
+	[ ! -e "$supervisor_pidfile" ] || fail "supervisor PID file remains after hot-replacement stop"
+	[ ! -e "$child_pidfile" ] || fail "child PID file remains after hot-replacement stop"
+	"$daemon_bin" start "$service_name"
+	wait_for_http "$state_dir/hot-replacement-http.json"
+	hot_new_parent=$(http_pid)
+	[ "$hot_new_parent" != "$hot_parent" ] || fail "hot-replacement restart reused PID $hot_parent"
+	verify_management_commands
+
 	current_scenario=graceful-stop
 	graceful_started=$(date +%s)
 	"$daemon_bin" stop "$service_name"
@@ -292,6 +317,11 @@ post_reboot() {
 	"$daemon_bin" start "$service_name"
 	wait_for_http "$state_dir/forced-stop-http.json"
 	forced_parent=$(http_pid)
+	replacement="$install_dir/.test-app.replacement.$$"
+	cp -p "$app_bin" "$replacement"
+	mv -f "$replacement" "$app_bin"
+	[ "$(http_pid)" = "$forced_parent" ] || fail "FreeBSD daemon supervisor restarted the forced-stop process after hot replacement"
+	verify_management_commands
 	forced_started=$(date +%s)
 	"$daemon_bin" stop "$service_name"
 	forced_elapsed=$(($(date +%s) - forced_started))

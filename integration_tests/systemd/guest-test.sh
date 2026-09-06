@@ -48,8 +48,10 @@ assert_file_contains() {
 }
 
 process_is_test_app() {
-	local pid=$1
-	[[ -e "/proc/$pid/exe" ]] && [[ "$(readlink "/proc/$pid/exe" 2>/dev/null || true)" == "$app_bin" ]]
+	local pid=$1 executable
+	[[ -e "/proc/$pid/exe" ]] || return 1
+	executable=$(readlink "/proc/$pid/exe" 2>/dev/null || true)
+	[[ "$executable" == "$app_bin" || "$executable" == "$app_bin (deleted)" ]]
 }
 
 wait_process_gone() {
@@ -67,14 +69,14 @@ assert_no_test_app_processes() {
 	local process executable
 	for process in /proc/[0-9]*; do
 		executable=$(readlink "$process/exe" 2>/dev/null || true)
-		if [[ "$executable" == "$app_bin" ]]; then
+		if [[ "$executable" == "$app_bin" || "$executable" == "$app_bin (deleted)" ]]; then
 			fail "test application process ${process##*/} leaked after cleanup"
 		fi
 	done
 }
 
 assert_selinux_enforcing() {
-	[[ "$expect_selinux" == 1 ]] || return
+	[[ "$expect_selinux" == 1 ]] || return 0
 	command -v getenforce >/dev/null || fail "getenforce is required for the SELinux lane"
 	[[ -r /sys/fs/selinux/enforce ]] || fail "SELinux enforce state is unavailable"
 	[[ "$(tr -d '[:space:]' </sys/fs/selinux/enforce)" == 1 ]] || fail "SELinux kernel enforcement is disabled"
@@ -82,7 +84,7 @@ assert_selinux_enforcing() {
 }
 
 verify_selinux_warning() {
-	[[ "$expect_selinux" == 1 ]] || return
+	[[ "$expect_selinux" == 1 ]] || return 0
 	local output status
 	[[ -x "$temporary_app" ]] || fail "missing temporary test application at $temporary_app"
 	rm -f "$warning_unit_path" "$warning_metadata_path"
@@ -102,14 +104,14 @@ verify_selinux_warning() {
 
 assert_selinux_path_labeled() {
 	local path=$1 context
-	[[ "$expect_selinux" == 1 ]] || return
+	[[ "$expect_selinux" == 1 ]] || return 0
 	context=$(ls -Zd -- "$path" 2>&1) || fail "could not read SELinux context for $path"
 	[[ "$context" != *unlabeled_t* && "$context" != "? "* ]] || fail "invalid SELinux context for $path: $context"
 	matchpathcon -V "$path" >/dev/null || fail "SELinux context does not match policy for $path"
 }
 
 verify_selinux_file_contexts() {
-	[[ "$expect_selinux" == 1 ]] || return
+	[[ "$expect_selinux" == 1 ]] || return 0
 	assert_selinux_path_labeled "$daemon_bin"
 	assert_selinux_path_labeled "$app_bin"
 	assert_selinux_path_labeled "$unit_path"
@@ -117,7 +119,7 @@ verify_selinux_file_contexts() {
 }
 
 verify_selinux_runtime_context() {
-	[[ "$expect_selinux" == 1 ]] || return
+	[[ "$expect_selinux" == 1 ]] || return 0
 	local pid context
 	pid=$(http_pid)
 	context=$(tr -d '\000' <"/proc/$pid/attr/current" 2>/dev/null || true)
@@ -126,7 +128,7 @@ verify_selinux_runtime_context() {
 }
 
 assert_no_relevant_avc_denials() {
-	[[ "$expect_selinux" == 1 ]] || return
+	[[ "$expect_selinux" == 1 ]] || return 0
 	local patterns="test-app|daemon-itest|lz_lz_${service_name}" journal_denials audit_denials denials
 	journal_denials=$(journalctl -k -b --no-pager 2>/dev/null | grep -Ei 'avc:.*denied' | grep -Ei "$patterns" || true)
 	audit_denials=
@@ -388,6 +390,7 @@ pre_reboot() {
 post_reboot() {
 	local boot_events="$install_dir/boot-events.jsonl"
 	local restart_parent restart_child new_parent hard_crash_parent
+	local hot_parent hot_child hot_new_parent replacement
 	local graceful_started graceful_elapsed
 	local auto_events="$install_dir/restart-events.jsonl"
 	local forced_events="$install_dir/forced-events.jsonl"
@@ -412,6 +415,28 @@ post_reboot() {
 	wait_process_gone "$restart_child"
 	assert_event "$boot_events" signal
 	assert_event "$boot_events" stopped
+
+	current_scenario=hot-replacement
+	log "verifying status, list, and stop after atomic executable replacement"
+	hot_parent=$(http_pid)
+	hot_child=$(cat "$install_dir/child.pid")
+	replacement="$install_dir/.test-app.replacement.$$"
+	cp -p "$app_bin" "$replacement"
+	mv -f "$replacement" "$app_bin"
+	[[ "$(readlink "/proc/$hot_parent/exe" 2>/dev/null || true)" == "$app_bin (deleted)" ]] || fail "running executable was not atomically replaced"
+	sleep 2
+	[[ "$(http_pid)" == "$hot_parent" ]] || fail "systemd restarted the application after hot replacement"
+	verify_management_commands
+	[[ "$(systemctl is-active "$unit_name")" == active ]] || fail "systemd unit is not active after hot replacement"
+	"$daemon_bin" stop "$service_name"
+	wait_process_gone "$hot_parent"
+	wait_process_gone "$hot_child"
+	[[ "$(systemctl is-active "$unit_name" 2>/dev/null || true)" == inactive ]] || fail "systemd unit is not inactive after hot-replacement stop"
+	"$daemon_bin" start "$service_name"
+	wait_for_http true >"$state_dir/hot-replacement-http.json"
+	hot_new_parent=$(http_pid)
+	[[ "$hot_new_parent" != "$hot_parent" ]] || fail "hot-replacement restart reused PID $hot_parent"
+	verify_management_commands
 
 	current_scenario=graceful-stop
 	graceful_started=$(date +%s)

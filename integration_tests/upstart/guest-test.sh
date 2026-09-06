@@ -36,8 +36,10 @@ assert_file_contains() {
 }
 
 process_is_test_app() {
-	local pid=$1
-	[[ -e "/proc/$pid/exe" ]] && [[ "$(readlink "/proc/$pid/exe" 2>/dev/null || true)" == "$app_bin" ]]
+	local pid=$1 executable
+	[[ -e "/proc/$pid/exe" ]] || return 1
+	executable=$(readlink "/proc/$pid/exe" 2>/dev/null || true)
+	[[ "$executable" == "$app_bin" || "$executable" == "$app_bin (deleted)" ]]
 }
 
 wait_process_gone() {
@@ -52,7 +54,7 @@ assert_no_test_app_processes() {
 	local process executable
 	for process in /proc/[0-9]*; do
 		executable=$(readlink "$process/exe" 2>/dev/null || true)
-		[[ "$executable" != "$app_bin" ]] || fail "test application process ${process##*/} leaked after cleanup"
+		[[ "$executable" != "$app_bin" && "$executable" != "$app_bin (deleted)" ]] || fail "test application process ${process##*/} leaked after cleanup"
 	done
 }
 
@@ -216,7 +218,7 @@ pre_reboot() {
 post_reboot() {
 	local boot_events="$install_dir/boot-events.jsonl"
 	local auto_events="$install_dir/restart-events.jsonl"
-	local old_pid new_pid hard_pid graceful_started graceful_elapsed
+	local old_pid new_pid hard_pid hot_pid hot_new_pid replacement graceful_started graceful_elapsed
 
 	current_scenario=post-reboot
 	log 'verifying reboot auto-start'
@@ -231,6 +233,26 @@ post_reboot() {
 	wait_process_gone "$old_pid"
 	wait_for_http >"$state_dir/explicit-restart-http.json"
 	log "explicit restart changed PID $old_pid to $new_pid"
+
+	current_scenario=hot-replacement
+	log 'verifying status, list, and stop after atomic executable replacement'
+	hot_pid=$(http_pid)
+	replacement="$install_dir/.test-app.replacement.$$"
+	cp -p "$app_bin" "$replacement"
+	mv -f "$replacement" "$app_bin"
+	[[ "$(readlink "/proc/$hot_pid/exe" 2>/dev/null || true)" == "$app_bin (deleted)" ]] || fail 'running executable was not atomically replaced'
+	sleep 2
+	[[ "$(http_pid)" == "$hot_pid" ]] || fail 'Upstart respawned the application after hot replacement'
+	verify_management_commands
+	assert_contains "$(status "$registration_name")" 'start/running' 'Upstart status after hot replacement'
+	"$daemon_bin" stop "$service_name"
+	wait_process_gone "$hot_pid"
+	assert_contains "$(status "$registration_name" 2>&1 || true)" 'stop/waiting' 'Upstart status after hot-replacement stop'
+	"$daemon_bin" start "$service_name"
+	hot_new_pid=$(wait_for_new_http_pid "$hot_pid" 30)
+	wait_for_http >"$state_dir/hot-replacement-http.json"
+	[[ "$hot_new_pid" != "$hot_pid" ]] || fail "hot-replacement restart reused PID $hot_pid"
+	verify_management_commands
 
 	current_scenario=graceful-stop
 	graceful_started=$(date +%s)

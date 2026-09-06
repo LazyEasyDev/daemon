@@ -393,6 +393,7 @@ log 'building Windows/amd64 daemon and application binaries'
 	cd "$repo_dir"
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -o "$build_dir/daemon.exe" .
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -o "$build_dir/test-app.exe" ./test_app
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags=-buildid=daemon-windows-hot-replacement -o "$build_dir/test-app-replacement.exe" ./test_app
 )
 printf '%s\n' 'daemon-util relative path test passed' >"$build_dir/relative-path-test.txt"
 cp "$script_dir/guest-test.ps1" "$build_dir/guest-test.ps1"
@@ -400,7 +401,7 @@ cp "$script_dir/guest-test.ps1" "$build_dir/guest-test.ps1"
 python3 -m http.server "$payload_port" --bind 127.0.0.1 --directory "$build_dir" >"$artifact_dir/payload-server.log" 2>&1 &
 payload_pid=$!
 sleep 1
-winrm_ps "New-Item -ItemType Directory -Path C:\\daemon-itest -Force | Out-Null; \$wc=New-Object Net.WebClient; \$wc.DownloadFile('http://10.0.2.2:$payload_port/daemon.exe','C:\\daemon-itest\\daemon.exe'); \$wc.DownloadFile('http://10.0.2.2:$payload_port/test-app.exe','C:\\daemon-itest\\test-app.exe'); \$wc.DownloadFile('http://10.0.2.2:$payload_port/relative-path-test.txt','C:\\daemon-itest\\relative-path-test.txt'); \$wc.DownloadFile('http://10.0.2.2:$payload_port/guest-test.ps1','C:\\daemon-itest\\guest-test.ps1')"
+winrm_ps "New-Item -ItemType Directory -Path C:\\daemon-itest -Force | Out-Null; \$wc=New-Object Net.WebClient; \$wc.DownloadFile('http://10.0.2.2:$payload_port/daemon.exe','C:\\daemon-itest\\daemon.exe'); \$wc.DownloadFile('http://10.0.2.2:$payload_port/test-app.exe','C:\\daemon-itest\\test-app.exe'); \$wc.DownloadFile('http://10.0.2.2:$payload_port/test-app-replacement.exe','C:\\daemon-itest\\test-app-replacement.exe'); \$wc.DownloadFile('http://10.0.2.2:$payload_port/relative-path-test.txt','C:\\daemon-itest\\relative-path-test.txt'); \$wc.DownloadFile('http://10.0.2.2:$payload_port/guest-test.ps1','C:\\daemon-itest\\guest-test.ps1')"
 
 log 'running pre-reboot Windows application checks'
 winrm_ps "& C:\\daemon-itest\\guest-test.ps1 -Phase pre-reboot -ServiceName '$service_name' -Port $app_port"
@@ -447,6 +448,9 @@ while (( SECONDS < deadline )); do
 done
 [[ -n "$new_pid" ]] || fail "SCM did not recover host-observed app PID $old_pid"
 log "host-observed hard crash recovered PID $old_pid as $new_pid"
+
+log 'testing Windows running-image and replacement-after-stop semantics'
+winrm_ps "& C:\\daemon-itest\\guest-test.ps1 -Phase hot-replacement -ServiceName '$service_name' -Port $app_port"
 
 log 'running post-reboot Windows lifecycle and recovery checks'
 winrm_ps "& C:\\daemon-itest\\guest-test.ps1 -Phase post-reboot -ServiceName '$service_name' -Port $app_port"

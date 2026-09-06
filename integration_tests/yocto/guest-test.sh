@@ -379,7 +379,7 @@ post_reboot() {
 	sleep 2
 	[ "$(http_pid)" = "$hot_parent" ] || fail 'watchdog restarted the application after hot replacement'
 	[ "$(cat "$identityfile")" = "$hot_identity" ] || fail 'process identity changed after hot replacement'
-	assert_contains "$("$daemon_bin" status "$service_name")" running 'status after hot replacement'
+	verify_management_commands
 	"$daemon_bin" stop "$service_name"
 	wait_process_gone "$hot_parent"
 	[ ! -e "$pidfile" ] || fail 'application PID file remains after hot-replacement stop'
@@ -392,6 +392,7 @@ post_reboot() {
 		"$hot_new_parent "*) ;;
 		*) fail 'new application identity was not recorded' ;;
 	esac
+	verify_management_commands
 
 	current_scenario=graceful-stop
 	graceful_started=$(date +%s)

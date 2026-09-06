@@ -44,8 +44,10 @@ assert_file_contains() {
 }
 
 process_is_test_app() {
-	local pid=$1
-	[[ -e "/proc/$pid/exe" ]] && [[ "$(readlink "/proc/$pid/exe" 2>/dev/null || true)" == "$app_bin" ]]
+	local pid=$1 executable
+	[[ -e "/proc/$pid/exe" ]] || return 1
+	executable=$(readlink "/proc/$pid/exe" 2>/dev/null || true)
+	[[ "$executable" == "$app_bin" || "$executable" == "$app_bin (deleted)" ]]
 }
 
 wait_process_gone() {
@@ -63,7 +65,7 @@ assert_no_test_app_processes() {
 	local process executable
 	for process in /proc/[0-9]*; do
 		executable=$(readlink "$process/exe" 2>/dev/null || true)
-		if [[ "$executable" == "$app_bin" ]]; then
+		if [[ "$executable" == "$app_bin" || "$executable" == "$app_bin (deleted)" ]]; then
 			fail "test application process ${process##*/} leaked after cleanup"
 		fi
 	done
@@ -302,6 +304,7 @@ pre_reboot() {
 post_reboot() {
 	local boot_events="$install_dir/boot-events.jsonl"
 	local restart_parent restart_child new_parent
+	local hot_parent hot_child hot_new_parent replacement
 	local graceful_started graceful_elapsed
 	local auto_events="$install_dir/restart-events.jsonl"
 	local forced_events="$install_dir/forced-events.jsonl"
@@ -325,6 +328,28 @@ post_reboot() {
 	wait_process_gone "$restart_child"
 	assert_event "$boot_events" signal
 	assert_event "$boot_events" stopped
+
+	current_scenario=hot-replacement
+	log "verifying status, list, and stop after atomic executable replacement"
+	hot_parent=$(http_pid)
+	hot_child=$(cat "$install_dir/child.pid")
+	replacement="$install_dir/.test-app.replacement.$$"
+	cp -p "$app_bin" "$replacement"
+	mv -f "$replacement" "$app_bin"
+	[[ "$(readlink "/proc/$hot_parent/exe" 2>/dev/null || true)" == "$app_bin (deleted)" ]] || fail "running executable was not atomically replaced"
+	sleep 2
+	[[ "$(http_pid)" == "$hot_parent" ]] || fail "OpenRC restarted the application after hot replacement"
+	verify_management_commands
+	assert_contains "$(rc-service "$registration_name" status 2>&1 || true)" 'started' 'OpenRC status after hot replacement'
+	"$daemon_bin" stop "$service_name"
+	wait_process_gone "$hot_parent"
+	wait_process_gone "$hot_child"
+	assert_contains "$(rc-service "$registration_name" status 2>&1 || true)" 'stopped' 'OpenRC status after hot-replacement stop'
+	"$daemon_bin" start "$service_name"
+	wait_for_http true >"$state_dir/hot-replacement-http.json"
+	hot_new_parent=$(http_pid)
+	[[ "$hot_new_parent" != "$hot_parent" ]] || fail "hot-replacement restart reused PID $hot_parent"
+	verify_management_commands
 
 	current_scenario=graceful-stop
 	graceful_started=$(date +%s)

@@ -277,8 +277,9 @@ verify_definition() {
 	assert_file_contains "$service_path" 'stopgroup=true'
 	assert_file_contains "$service_path" 'respawn_delay=30'
 	assert_file_contains "$service_path" 'respawn_max=0'
-	assert_file_contains "$service_path" "daemon_stop_process_group=\$(service_get_value child_pid)"
-	assert_file_contains "$service_path" "kill -KILL -- \"-\$daemon_stop_process_group\""
+	if grep -Eq 'stop_pre\(\)|stop_post\(\)|daemon_stop_process_group|kill[[:space:]]+-KILL' "$service_path"; then
+		fail "OpenRC service script contains redundant manual process-group cleanup"
+	fi
 	[[ -e "$runlevel_link" ]] || fail "OpenRC default-runlevel link was not created"
 	rc-update show default | grep -Fq "$registration_name" || fail "service is not enabled in the default runlevel"
 }

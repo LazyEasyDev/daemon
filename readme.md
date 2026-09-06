@@ -243,13 +243,17 @@ manager, so small behavioral differences between platforms are expected.
 | Windows | Sends `CTRL_BREAK_EVENT`, then terminates the Job Object after the timeout |
 | systemd | Stops processes remaining in the service control group |
 | OpenRC | Stops the supervised process group |
-| System V | Starts a dedicated session and signals its process group |
+| System V | Validates and signals the recorded main PID; descendant cleanup is not guaranteed |
+| Buildroot | Uses `start-stop-daemon` for the validated main PID; descendant cleanup is not guaranteed |
 | runit | Starts a dedicated process group and signals it through runit control hooks |
 | macOS launchd | Uses launchd's default process-group cleanup |
-| Buildroot, Upstart, OpenWrt, FreeBSD | Relies on native service-manager or supervisor behavior |
+| Upstart, OpenWrt, FreeBSD | Relies on native service-manager or supervisor behavior |
 
-Applications must not deliberately escape supervision by creating a separate
-session, process group, or console.
+Backends without native containment, notably System V and Buildroot, guarantee
+termination only for the validated main process. Applications are responsible
+for stopping their own descendants. On other platforms, applications must not
+deliberately escape supervision by creating a separate session, process group,
+console, cgroup, or job.
 
 ### Windows applications
 

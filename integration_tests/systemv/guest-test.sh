@@ -287,7 +287,6 @@ require_environment() {
 	[[ "$(cat /proc/1/comm)" == init ]] || fail "System V init is not PID 1"
 	dpkg-query -W sysvinit-core >/dev/null 2>&1 || fail "sysvinit-core is not installed"
 	command -v service >/dev/null || fail "service is required in the guest"
-	command -v setsid >/dev/null || fail "setsid is required in the guest"
 	command -v python3 >/dev/null || fail "python3 is required in the guest"
 	for runlevel in 2 3 4 5; do
 		[[ -d "/etc/rc${runlevel}.d" ]] && break
@@ -324,9 +323,11 @@ verify_definition() {
 	assert_file_contains "$service_path" 'identityfile="${pidfile}.identity"'
 	assert_file_contains "$service_path" 'current_starttime=$(process_starttime "$pid")'
 	assert_file_contains "$service_path" "watcher_pidfile=\${pidfile%.pid}.watchdog.pid"
-	assert_file_contains "$service_path" "setsid \"\$exec\""
-	assert_file_contains "$service_path" 'signal_process_group TERM'
-	assert_file_contains "$service_path" 'signal_process_group KILL'
+	assert_file_contains "$service_path" 'signal_process TERM'
+	assert_file_contains "$service_path" 'signal_process KILL'
+	if grep -Eq 'setsid|process_group_members|signal_process_group' "$service_path"; then
+		fail "System V init script contains unsupported custom process-group management"
+	fi
 	verify_links_present
 }
 
@@ -343,21 +344,17 @@ verify_management_commands() {
 
 pre_reboot() {
 	local events="$install_dir/boot-events.jsonl"
-	local child_pid watcher_pid
+	local watcher_pid
 	current_scenario=pre-reboot
 	log "installing boot-persistence scenario"
 	cleanup_service
 	install_scenario 5s "$events" \
-		--stop_delay 1s \
-		--spawn-child=true \
-		--child-pid-path child.pid
+		--stop_delay 1s
 	verify_definition
 	assert_file_contains "$service_path" 'stop_timeout=5'
 	"$daemon_bin" start "$service_name"
-	wait_for_http true >"$state_dir/pre-reboot-http.json"
+	wait_for_http false >"$state_dir/pre-reboot-http.json"
 	verify_management_commands
-	child_pid=$(cat "$install_dir/child.pid")
-	process_is_test_app "$child_pid" || fail "child process $child_pid is not running"
 	watcher_pid=$(wait_for_watcher)
 	kill -0 "$watcher_pid" 2>/dev/null || fail "watchdog process $watcher_pid is not running"
 	http_pid >"$state_dir/pre-reboot-parent.pid"
@@ -368,18 +365,18 @@ pre_reboot() {
 
 post_reboot() {
 	local boot_events="$install_dir/boot-events.jsonl"
-	local restart_parent restart_child new_parent
+	local restart_parent new_parent
 	local hot_parent hot_new_parent hot_identity replacement
 	local graceful_started graceful_elapsed
 	local auto_events="$install_dir/restart-events.jsonl"
 	local forced_events="$install_dir/forced-events.jsonl"
-	local forced_child forced_started forced_elapsed
+	local forced_started forced_elapsed
 	local watcher_pid
 
 	current_scenario=post-reboot
 	log "verifying boot persistence"
 	verify_links_present
-	wait_for_http true >"$state_dir/post-reboot-http.json"
+	wait_for_http false >"$state_dir/post-reboot-http.json"
 	(( $(event_count "$boot_events" started) >= 2 )) || fail "service did not record a second startup after reboot"
 	watcher_pid=$(wait_for_watcher)
 	kill -0 "$watcher_pid" 2>/dev/null || fail "watchdog did not restart after reboot"
@@ -387,13 +384,11 @@ post_reboot() {
 
 	current_scenario=explicit-restart
 	restart_parent=$(http_pid)
-	restart_child=$(cat "$install_dir/child.pid")
 	"$daemon_bin" restart "$service_name"
 	new_parent=$(wait_for_new_http_pid "$restart_parent" 20)
 	[[ "$new_parent" != "$restart_parent" ]] || fail "restart reused parent PID $restart_parent"
-	wait_for_http true >"$state_dir/restart-http.json"
+	wait_for_http false >"$state_dir/restart-http.json"
 	wait_process_gone "$restart_parent"
-	wait_process_gone "$restart_child"
 	assert_event "$boot_events" signal
 	assert_event "$boot_events" stopped
 
@@ -415,7 +410,7 @@ post_reboot() {
 	[[ ! -e "$pidfile" ]] || fail "application PID file remains after hot-replacement stop"
 	[[ ! -e "$identityfile" ]] || fail "application identity file remains after hot-replacement stop"
 	"$daemon_bin" start "$service_name"
-	wait_for_http true >"$state_dir/hot-replacement-http.json"
+	wait_for_http false >"$state_dir/hot-replacement-http.json"
 	hot_new_parent=$(http_pid)
 	[[ "$hot_new_parent" != "$hot_parent" ]] || fail "hot-replacement restart reused PID $hot_parent"
 	[[ "$(cat "$identityfile")" == "$hot_new_parent "* ]] || fail "new application identity was not recorded"
@@ -448,15 +443,12 @@ post_reboot() {
 	"$daemon_bin" remove "$service_name"
 
 	current_scenario=forced-stop
-	log "verifying timeout escalation and process-group cleanup"
+	log "verifying timeout escalation for the validated main process"
 	install_scenario 2s "$forced_events" \
-		--stop_delay 30s \
-		--spawn-child=true \
-		--child-pid-path child.pid
+		--stop_delay 30s
 	assert_file_contains "$service_path" 'stop_timeout=2'
 	"$daemon_bin" start "$service_name"
-	wait_for_http true >"$state_dir/forced-stop-http.json"
-	forced_child=$(cat "$install_dir/child.pid")
+	wait_for_http false >"$state_dir/forced-stop-http.json"
 	forced_started=$(date +%s)
 	"$daemon_bin" stop "$service_name"
 	forced_elapsed=$(($(date +%s) - forced_started))
@@ -466,7 +458,6 @@ post_reboot() {
 	if grep -Fq '"event":"stopped"' "$forced_events"; then
 		fail "application reported graceful completion despite forced termination"
 	fi
-	wait_process_gone "$forced_child"
 	assert_no_test_app_processes
 	"$daemon_bin" remove "$service_name"
 

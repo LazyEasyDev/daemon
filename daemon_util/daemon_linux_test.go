@@ -230,8 +230,6 @@ func TestOpenRCRespawnsWithoutRetryLimit(t *testing.T) {
 		"stopgroup=true",
 		"respawn_delay=30",
 		"respawn_max=0",
-		"daemon_stop_process_group=$(service_get_value child_pid)",
-		`kill -KILL -- "-$daemon_stop_process_group"`,
 	} {
 		if !strings.Contains(defaultOpenRCConfig, setting) {
 			t.Fatalf("OpenRC config does not contain %q", setting)
@@ -239,6 +237,11 @@ func TestOpenRCRespawnsWithoutRetryLimit(t *testing.T) {
 	}
 	if strings.Contains(defaultOpenRCConfig, "command_background=yes") {
 		t.Fatal("OpenRC config must leave the application in the foreground")
+	}
+	for _, redundant := range []string{"stop_pre()", "stop_post()", "daemon_stop_process_group", `kill -KILL`} {
+		if strings.Contains(defaultOpenRCConfig, redundant) {
+			t.Fatalf("OpenRC config contains redundant manual stop logic %q", redundant)
+		}
 	}
 }
 
@@ -734,7 +737,7 @@ func TestLinuxWatcherIdentityPrecedesSignal(t *testing.T) {
 	}
 }
 
-func TestSystemVValidatesProcessBeforeSignals(t *testing.T) {
+func TestSystemVValidatesMainProcessBeforeSignals(t *testing.T) {
 	for _, command := range []string{
 		`[ "$pid" -gt 1 ]`,
 		`identityfile="${pidfile}.identity"`,
@@ -748,19 +751,14 @@ func TestSystemVValidatesProcessBeforeSignals(t *testing.T) {
 		`if is_expected_executable && is_expected_process; then`,
 		`[ "$current_starttime" = "$identity_starttime" ]`,
 		`if ! is_expected_process; then`,
-		`setsid "$exec"`,
+		`"$exec" {{.Args}}`,
 		`if ! printf '%s\n' "$pid" > "$pidfile"; then`,
-		`target_pid=$pid`,
-		`process_group_members() {`,
-		`for process_stat in /proc/[0-9]*/stat; do`,
-		`process_after_name=${process_status##*) }`,
-		`[ "$3" = "$target_pid" ] && [ "$1" != Z ]`,
-		`[ -n "$(process_group_members)" ]`,
-		`signal_process_group() {`,
-		`kill "-$group_signal" "$process_pid"`,
-		`signal_process_group TERM`,
-		`signal_process_group KILL`,
-		`while is_process_group_running && [ "$elapsed" -lt "$stop_timeout" ]`,
+		`signal_process() {`,
+		`is_expected_process || return 1`,
+		`kill "-$process_signal" "$pid"`,
+		`signal_process TERM`,
+		`signal_process KILL`,
+		`while is_expected_process && [ "$elapsed" -lt "$stop_timeout" ]`,
 	} {
 		if !strings.Contains(defaultSystemVConfig, command) {
 			t.Fatalf("System V config does not contain %q", command)
@@ -769,11 +767,18 @@ func TestSystemVValidatesProcessBeforeSignals(t *testing.T) {
 	if strings.Contains(defaultSystemVConfig, `while kill -0 "$pid"`) {
 		t.Fatal("System V stop loop still trusts raw PID liveness")
 	}
-	if strings.Contains(defaultSystemVConfig, `kill -KILL "$pid"`) {
-		t.Fatal("System V stop still kills only the main process")
-	}
 	if strings.Contains(defaultSystemVConfig, `kill -TERM -- "-$pid"`) || strings.Contains(defaultSystemVConfig, `kill -KILL -- "-$pid"`) {
 		t.Fatal("System V startup rollback still uses non-portable negative process-group signaling")
+	}
+	for _, processGroupImplementation := range []string{
+		`setsid "$exec"`,
+		`process_group_members() {`,
+		`is_process_group_running() {`,
+		`signal_process_group() {`,
+	} {
+		if strings.Contains(defaultSystemVConfig, processGroupImplementation) {
+			t.Fatalf("System V config still contains custom process-group logic %q", processGroupImplementation)
+		}
 	}
 	if strings.Contains(defaultSystemVConfig, `/proc/$pid/cmdline`) {
 		t.Fatal("System V config still contains script-specific process matching")

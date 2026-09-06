@@ -338,36 +338,10 @@ is_expected_process() {
 	[ "$current_starttime" = "$identity_starttime" ]
 }
 
-process_group_members() {
-	for process_stat in /proc/[0-9]*/stat; do
-		[ -r "$process_stat" ] || continue
-		process_status=$(cat "$process_stat") || continue
-		process_after_name=${process_status##*) }
-		[ "$process_after_name" != "$process_status" ] || continue
-		set -- $process_after_name
-		[ "$#" -ge 3 ] || continue
-		if [ "$3" = "$target_pid" ] && [ "$1" != Z ]; then
-			process_pid=${process_stat%/stat}
-			printf '%s\n' "${process_pid##*/}"
-		fi
-	done
-}
-
-is_process_group_running() {
-	[ -n "$(process_group_members)" ]
-}
-
-signal_process_group() {
-	group_signal=$1
-	group_members=$(process_group_members)
-	[ -n "$group_members" ] || return 1
-	group_signaled=1
-	for process_pid in $group_members; do
-		if kill "-$group_signal" "$process_pid" 2>/dev/null; then
-			group_signaled=0
-		fi
-	done
-	return "$group_signaled"
+signal_process() {
+	process_signal=$1
+	is_expected_process || return 1
+	kill "-$process_signal" "$pid"
 }
 
 is_watcher_process() {
@@ -470,7 +444,6 @@ disable_watcher() {
 
 start_app() {
 	[ -x "$exec" ] || exit 5
-	command -v setsid >/dev/null 2>&1 || exit 5
 	cd "$working_directory" || exit 5
 
 	if [ -f "$pidfile" ] || [ -f "$identityfile" ]; then
@@ -481,13 +454,12 @@ start_app() {
 
 	if ! [ -f "$pidfile" ]; then
 		printf 'Starting %s:\t' "$servname"
-		setsid "$exec" {{.Args}} >/dev/null 2>&1 &
+		"$exec" {{.Args}} >/dev/null 2>&1 &
 		pid=$!
 		if ! printf '%s\n' "$pid" > "$pidfile"; then
-			target_pid=$pid
-			signal_process_group TERM >/dev/null 2>&1 || true
+			kill -TERM "$pid" >/dev/null 2>&1 || true
 			sleep 1
-			signal_process_group KILL >/dev/null 2>&1 || true
+			kill -KILL "$pid" >/dev/null 2>&1 || true
 			wait "$pid" 2>/dev/null
 			rm -f "$identityfile"
 			echo "FAIL"
@@ -500,10 +472,9 @@ start_app() {
 			touch "$lockfile"
 			echo "OK"
 		else
-			target_pid=$pid
-			signal_process_group TERM >/dev/null 2>&1 || true
+			kill -TERM "$pid" >/dev/null 2>&1 || true
 			sleep 1
-			signal_process_group KILL >/dev/null 2>&1 || true
+			kill -KILL "$pid" >/dev/null 2>&1 || true
 			wait "$pid"
 			retval=$?
 			[ "$retval" -ne 0 ] || retval=1
@@ -541,29 +512,28 @@ stop() {
 		echo "OK"
 		return 0
 	fi
-	target_pid=$pid
-	if ! signal_process_group TERM && is_process_group_running; then
+	if ! signal_process TERM && is_expected_process; then
 		echo "FAIL"
 		return 1
 	fi
 
 	elapsed=0
-	while is_process_group_running && [ "$elapsed" -lt "$stop_timeout" ]; do
+	while is_expected_process && [ "$elapsed" -lt "$stop_timeout" ]; do
 		sleep 1
 		elapsed=$((elapsed + 1))
 	done
-	if is_process_group_running; then
-		if ! signal_process_group KILL && is_process_group_running; then
+	if is_expected_process; then
+		if ! signal_process KILL && is_expected_process; then
 			echo "FAIL"
 			return 1
 		fi
 	fi
 	force_elapsed=0
-	while is_process_group_running && [ "$force_elapsed" -lt 5 ]; do
+	while is_expected_process && [ "$force_elapsed" -lt 5 ]; do
 		sleep 1
 		force_elapsed=$((force_elapsed + 1))
 	done
-	if is_process_group_running; then
+	if is_expected_process; then
 		echo "FAIL"
 		return 1
 	fi

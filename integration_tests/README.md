@@ -109,7 +109,8 @@ QEMU boots.
 The Yocto lane boots the official Poky 5.0.19 Scarthgap LTS `qemuarm64`
 `core-image-minimal` image with SysVinit. It verifies runlevel registration,
 reboot persistence, explicit restart, configured-failure and direct `SIGKILL`
-watchdog recovery, graceful and forced process-group cleanup, and removal.
+watchdog recovery, graceful and forced validated-main-process cleanup, and
+removal. System V does not promise cleanup of arbitrary descendants.
 
 The Buildroot lane builds baseline, debug, and release variants from source and
 boots them with a dedicated libvirt guest runner. It verifies watchdog recovery,
@@ -321,9 +322,9 @@ stopped ext4 image.
 
 This lane uses Poky's native SysVinit environment without installing packages
 or adding compatibility wrappers. It validates the presence and behavior of
-the image's real `service`, `setsid`, BusyBox `wget`, runlevel scripts, and
-watchdog process. The test also uncovered and now covers portable SysV
-process-group signaling and graceful-exit races on BusyBox.
+the image's real `service`, BusyBox `wget`, runlevel scripts, and watchdog
+process. It validates PID/start-time identity before TERM/KILL escalation and
+does not implement a custom process-tree or process-group supervisor.
 
 Yocto-specific settings are:
 

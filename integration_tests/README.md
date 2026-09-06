@@ -31,11 +31,40 @@ The Raspberry Pi OS lane runs that systemd lifecycle against both the official
 asserts the guest bitness, mounts the image's real Pi firmware partition, and
 verifies service recovery after a direct `SIGKILL`.
 
+The Armbian lane runs the systemd lifecycle against the official minimal ARM64
+Orange Pi 5 image. It boots the image's real root filesystem under QEMU `virt`,
+verifies its published SHA-256, preserves Armbian userspace and configuration,
+and covers reboot persistence, recovery, atomic replacement, timeout escalation,
+and cgroup cleanup without requiring physical RK3588 hardware.
+
+The DietPi lane applies the same two-boot test to the official Orange Pi 5
+DietPi ARMv8 image. The shared guest test intentionally needs neither Python nor
+an online package install, so it also runs on minimal vendor images.
+
+The Radxa and Orange Pi vendor lanes run the official ROCK 5B Debian CLI and
+Orange Pi 5 Ubuntu Server userspaces, respectively. Their board-only kernels do
+not represent a QEMU `virt` machine, so the lanes use the checksum-verified
+Yocto `qemuarm64` kernel while preserving and testing each vendor root
+filesystem. This validates userspace, systemd, daemon lifecycle, persistence,
+and atomic executable replacement; it does not validate RK3588 hardware,
+firmware, boot loaders, device trees, or peripherals.
+
+The Arch Linux ARM lane builds a writable filesystem from the official,
+GPG-verified generic AArch64 rootfs and boots its native kernel and initramfs.
+That generic rootfs is the Arch userspace supplied for PINE64 and Rockchip board
+installations. The Manjaro ARM lane similarly tests the official bootable
+minimal generic ARM64 image using a verified generic QEMU kernel.
+
 The Rocky Linux lane runs the systemd lifecycle on an official Rocky Linux 9
 GenericCloud image with SELinux Enforcing. It verifies the real risky-path
 warning and noninteractive refusal, safe installation from `/opt` without a
 warning bypass, persistent file labels, runtime process context, and absence of
 service-specific AVC denials.
+
+The Fedora lane runs the same SELinux-enforcing lifecycle against Fedora Cloud
+Base ARM64. The openSUSE Tumbleweed lane uses its official minimal ARM64 cloud
+image, verifies AppArmor kernel availability, and runs the complete systemd
+lifecycle on the image's XFS root filesystem.
 
 The OpenRC lane performs the same application-level lifecycle checks and also
 verifies its generated `openrc-run` script, `supervise-daemon` configuration,
@@ -52,11 +81,11 @@ generated job definition, boot auto-start, explicit restart, graceful stop,
 configured-failure respawn, hard-crash respawn, atomic executable replacement,
 and complete removal.
 
-The Windows lane installs Windows Server 2019 Evaluation Server Core and
+The Windows lane installs Windows Server 2019 or 2025 Evaluation Server Core and
 verifies SCM registration, automatic startup, recovery actions, external HTTP
 behavior, configured-failure and hard-crash recovery, reboot persistence,
-running-image replacement with hash verification, stop/start behavior, metadata
-cleanup, and service removal.
+running-image replacement with hash verification, graceful and forced stop
+behavior, Job Object descendant cleanup, metadata cleanup, and service removal.
 
 The FreeBSD lane verifies the rc.d backend, `/usr/sbin/daemon` supervision,
 supervisor and application PID files, boot enablement, restart behavior,
@@ -65,6 +94,17 @@ atomic executable replacement, graceful and forced shutdown, and removal.
 The OpenWrt lane verifies procd backend detection, generated `rc.common`
 scripts, boot enablement, respawn behavior, atomic executable replacement, stop
 timeout handling, and removal.
+
+The OpenWrt MIPS lane runs that lifecycle on official Malta big-endian and
+little-endian images with matching static Go binaries and soft-float settings.
+The ImmortalWrt lane runs it on the official ARM64 EFI image and preserves test
+state across two separately controlled QEMU boots.
+
+The FriendlyWrt lane runs that procd lifecycle against the official NanoPi
+R5S/R5C FriendlyWrt 25.12 ARM64 root filesystem. It verifies the vendor archive
+checksum and Rockchip target metadata, converts the vendor's Android-sparse ext4
+container, and uses a dedicated state disk to verify persistence across two
+QEMU boots.
 
 The Yocto lane boots the official Poky 5.0.19 Scarthgap LTS `qemuarm64`
 `core-image-minimal` image with SysVinit. It verifies runlevel registration,
@@ -82,10 +122,10 @@ persistence, explicit restart, configured-failure and hard-crash recovery,
 atomic executable replacement, graceful and forced process-group cleanup, and
 removal.
 
-The tests use immutable Ubuntu, Rocky Linux, Raspberry Pi OS, Poky, Alpine,
-Gentoo stage3, Void Linux rootfs, FreeBSD, and OpenWrt artifacts with disposable
-overlays, copies, or generated filesystems. Cached source artifacts are never
-modified.
+The tests use immutable Ubuntu, Rocky Linux, Raspberry Pi OS, Armbian, Poky,
+Alpine, Gentoo stage3, Void Linux rootfs, FreeBSD, OpenWrt, and FriendlyWrt
+artifacts with disposable overlays, copies, or generated filesystems. Cached
+source artifacts are never modified.
 
 ## Ubuntu host prerequisites
 
@@ -233,6 +273,34 @@ The shared `VM_MEMORY_MIB`, `VM_VCPUS`, `VM_BOOT_TIMEOUT`, `TEST_APP_PORT`,
 `INTEGRATION_CACHE_DIR`, `INTEGRATION_ARTIFACT_DIR`, `VM_WORK_DIR`, and
 `KEEP_VM` settings also apply. The variants run sequentially and need about
 8 GiB of free disk for downloads, one expanded image, and working files.
+
+## Run the Armbian Orange Pi lane
+
+The Armbian lane defaults to the official Orange Pi 5 ARM64 minimal image:
+
+```sh
+./integration_tests/armbian/run-qemu.sh
+```
+
+The runner verifies Armbian's published SHA-256, extracts and enlarges the real
+ext4 root partition, and boots it using the image's native Rockchip64 kernel and
+initramfs on generic QEMU `virt` hardware. The guest runs the complete systemd
+application lifecycle and hot-replacement scenario without SSH or cloud-init.
+This validates Armbian userspace and service behavior; the RK3588 bootloader,
+device tree, and peripherals still require physical Orange Pi or Rock 5 hardware.
+
+Armbian-specific settings are:
+
+| Environment variable | Default | Purpose |
+| --- | --- | --- |
+| `ARMBIAN_RELEASE` | `26.8.1` | Versioned Armbian release |
+| `ARMBIAN_BOARD` | `Orangepi5` | Board image userspace |
+| `ARMBIAN_CODENAME` | `trixie` | Debian userspace codename |
+| `ARMBIAN_KERNEL_VERSION` | `6.18.43` | Native image kernel version |
+| `ARMBIAN_IMAGE` | Cached official image | Existing compressed board image |
+| `ARMBIAN_IMAGE_URL` | Official versioned image URL | Image download source |
+| `ARMBIAN_IMAGE_SHA256` | Published checksum | Optional pinned checksum override |
+| `ARMBIAN_ROOTFS_SIZE_MIB` | `3072` | Expanded disposable root filesystem size |
 
 ## Run the Yocto/Poky lane
 
@@ -413,18 +481,20 @@ The shared VM, cache, artifact, and `KEEP_VM` settings listed above also apply.
 
 ## Run the Windows Server lane
 
-The Windows lane targets the official Windows Server 2019 Evaluation ISO and
-runs without requiring a prebuilt Windows image:
+The Windows lane defaults to the official Windows Server 2019 Evaluation ISO and
+runs without requiring a prebuilt Windows image. Select Server 2025 explicitly:
 
 ```sh
 ./integration_tests/windows/run-qemu.sh
+WINDOWS_SERVER_VERSION=2025 ./integration_tests/windows/run-qemu.sh
 ```
 
-The first run downloads the 4.9 GiB Microsoft ISO, records its SHA-256, and
-performs one unattended Server Core installation. Later runs use a disposable
-qcow2 overlay backed by the cached clean base disk. The test communicates with
-the guest through WinRM and forwards the application's HTTP endpoint to the
-host for external assertions.
+The first run downloads the selected Microsoft ISO (4.9 GiB for Server 2019 or
+7.6 GiB for Server 2025), verifies its pinned SHA-256, and performs one
+unattended Server Core installation. Later runs use a disposable qcow2 overlay
+backed by the cached clean base disk. The test communicates with the guest
+through WinRM and forwards the application's HTTP endpoint to the host for
+external assertions.
 
 The runner builds a second application binary with a distinct PE hash and uses
 same-volume `File.Replace` while the original process is running. It accepts and
@@ -432,29 +502,33 @@ records either valid Windows result: a successful live replacement or an
 expected sharing violation with an unchanged target. It then stops the service,
 ensures the replacement hash is installed, starts the service, and verifies a
 new application PID plus healthy SCM/status/list behavior. Windows Server 2019
-currently permits the live replacement in this test configuration.
+and Server 2025 both permit live replacement in the tested configurations.
 
-Windows Server 2019 is x86-64-only. On an ARM64 host the runner extracts Ubuntu's
+These Windows Server images are x86-64-only. On an ARM64 host the runner extracts Ubuntu's
 `qemu-system-x86` and WinRM client packages into `/var/tmp` without sudo, then
 uses QEMU TCG cross-architecture emulation. Initial installation can take
-several hours; at least 12 GiB of free disk space is required. The evaluation
-image remains subject to Microsoft's licensing terms.
+several hours; at least 12 GiB for Server 2019 or 18 GiB for Server 2025 of free
+disk space is required. The evaluation image remains subject to Microsoft's
+licensing terms.
 
 Windows-specific settings are:
 
 | Environment variable | Default | Purpose |
 | --- | --- | --- |
-| `WINDOWS_ISO` | Cached official Server 2019 ISO | Existing installation ISO |
+| `WINDOWS_SERVER_VERSION` | `2019` | Evaluation release: `2019` or `2025` |
+| `WINDOWS_ISO` | Cached official ISO for the selected release | Existing installation ISO |
 | `WINDOWS_ISO_URL` | Official Microsoft evaluation URL | ISO download source |
 | `WINDOWS_ISO_SHA256` | Pinned official-image checksum | Override checksum for a supplied ISO |
 | `WINDOWS_BASE_IMAGE` | Cached Server Core qcow2 | Existing prepared base image |
+| `WINDOWS_RESET_BASE` | `0` | Set to `1` to discard and reinstall the selected cached base image |
 | `WINDOWS_ADMIN_USER` | `Administrator` | Disposable guest administrator |
 | `WINDOWS_ADMIN_PASSWORD` | `DaemonTest!2026` | Disposable guest password |
+| `WINDOWS_WINRM_OPERATION_TIMEOUT` | `180` | Timeout for an individual WinRM operation in seconds |
 | `WINDOWS_WINRM_PORT` | `55985` | Host port forwarded to guest WinRM |
 | `WINDOWS_APP_HOST_PORT` | `58080` | Host port forwarded to the test application |
 | `WINDOWS_PAYLOAD_PORT` | `58081` | Temporary host payload server port |
 | `WINDOWS_VNC_DISPLAY` | `7` | Local-only VNC display used for diagnostics |
-| `VM_INSTALL_TIMEOUT` | `14400` | First installation timeout in seconds |
+| `VM_INSTALL_TIMEOUT` | `14400` (2019), `21600` (2025) | First installation timeout in seconds |
 
 The shared cache, artifact, memory, CPU, disk, boot-timeout, and `KEEP_VM`
 settings also apply. The defaults are 2.5 GiB memory, two vCPUs, and a sparse
@@ -519,6 +593,33 @@ The shared VM and artifact settings also apply. The OpenWrt default is 512 MiB
 of memory. OpenWrt mounts `/var` as volatile storage, so informational `APP` and
 `ARGS` list metadata is expected to disappear after reboot; the persistent
 procd service definition remains authoritative.
+
+## Run the NanoPi FriendlyWrt lane
+
+The FriendlyWrt lane uses the official NanoPi R5S/R5C FriendlyWrt 25.12 archive:
+
+```sh
+./integration_tests/friendlywrt/run-qemu.sh
+```
+
+The archive contains a Linux/OpenWrt ext4 root filesystem stored in Android
+sparse-image format. The runner uses `simg2img` only as a host-side format
+converter, verifies that the result identifies OpenWrt `rockchip/armv8` with
+procd as PID 1, and boots the real FriendlyWrt userspace with a generic ARM64
+QEMU kernel. A separate ext4 state disk retains phase and artifact data despite
+FriendlyWrt's writable overlay, allowing the host to validate both boot phases.
+Board-specific RK3568 firmware and network hardware require a physical NanoPi.
+
+FriendlyWrt-specific settings are:
+
+| Environment variable | Default | Purpose |
+| --- | --- | --- |
+| `FRIENDLYWRT_RELEASE` | `2026-08-07` | Official release tag date |
+| `FRIENDLYWRT_ARCHIVE` | Cached official archive | Existing NanoPi image archive |
+| `FRIENDLYWRT_ARCHIVE_URL` | Official GitHub release URL | Archive download source |
+| `FRIENDLYWRT_ARCHIVE_SHA256` | Pinned release checksum | Archive integrity check |
+| `FRIENDLYWRT_QEMU_KERNEL` | Cached Poky qemuarm64 kernel | Generic test boot kernel |
+| `FRIENDLYWRT_STATE_SIZE_MIB` | `128` | Persistent test-state disk size |
 
 ### Configuration
 

@@ -15,6 +15,7 @@ metadata_path="/var/lib/daemon-util/services/${registration_name}.json"
 state_dir="/var/tmp/daemon-itest-$service_name"
 artifact_dir="$state_dir/artifacts"
 fixture_path="$install_dir/relative-path-test.txt"
+interpreted_test="$install_dir/interpreted-app-test.sh"
 current_scenario=initialization
 
 log() {
@@ -24,6 +25,19 @@ log() {
 fail() {
 	printf '[runit-itest] ERROR: %s\n' "$*" >&2
 	return 1
+}
+
+. "$interpreted_test"
+
+interpreted_definition_path() {
+	printf '/etc/sv/lz_lz_%s/run\n' "$1"
+}
+
+interpreted_removed() {
+	local auxiliary=$1 registration="lz_lz_$1"
+	[[ ! -e "/etc/sv/$registration" ]] || fail "auxiliary runit service remains: $registration"
+	[[ ! -L "/var/service/$registration" ]] || fail "auxiliary runit enablement remains: $registration"
+	[[ ! -e "/var/lib/daemon-util/services/${registration}.json" ]] || fail "auxiliary metadata remains: $auxiliary"
 }
 
 assert_contains() {
@@ -172,6 +186,7 @@ require_environment() {
 	[[ $(id -u) -eq 0 ]] || fail 'guest test must run as root'
 	[[ -x "$daemon_bin" ]] || fail "missing daemon binary at $daemon_bin"
 	[[ -x "$app_bin" ]] || fail "missing test application at $app_bin"
+	[[ -r "$interpreted_test" ]] || fail "missing interpreted application test at $interpreted_test"
 	[[ -f "$fixture_path" ]] || fail "missing relative-path fixture at $fixture_path"
 	grep -Fq 'ID="void"' /etc/os-release || fail 'guest is not Void Linux'
 	pid1=$(readlink /proc/1/exe)
@@ -345,6 +360,10 @@ post_reboot() {
 	wait_process_gone "$forced_child"
 	assert_no_test_app_processes
 	"$daemon_bin" remove "$service_name"
+
+	current_scenario=interpreted-applications
+	log 'verifying symlinked native, shell, optional Python, and rejected direct-script applications'
+	verify_interpreted_applications
 
 	current_scenario=cleanup
 	collect_artifacts success

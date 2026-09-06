@@ -14,6 +14,7 @@ metadata_path="/var/lib/daemon-util/services/${registration_name}.json"
 state_dir="/var/tmp/daemon-itest-$service_name"
 artifact_dir="$state_dir/artifacts"
 fixture_path="$install_dir/relative-path-test.txt"
+interpreted_test="$install_dir/interpreted-app-test.sh"
 current_scenario=initialization
 
 log() {
@@ -23,6 +24,18 @@ log() {
 fail() {
 	printf '[upstart-itest] ERROR: %s\n' "$*" >&2
 	return 1
+}
+
+. "$interpreted_test"
+
+interpreted_definition_path() {
+	printf '/etc/init/lz_lz_%s.conf\n' "$1"
+}
+
+interpreted_removed() {
+	local auxiliary=$1 registration="lz_lz_$1"
+	[[ ! -e "/etc/init/${registration}.conf" ]] || fail "auxiliary Upstart job remains: $registration"
+	[[ ! -e "/var/lib/daemon-util/services/${registration}.json" ]] || fail "auxiliary metadata remains: $auxiliary"
 }
 
 assert_contains() {
@@ -150,6 +163,7 @@ require_environment() {
 	[[ $(id -u) -eq 0 ]] || fail 'guest test must run as root'
 	[[ -x "$daemon_bin" ]] || fail "missing daemon binary at $daemon_bin"
 	[[ -x "$app_bin" ]] || fail "missing test application at $app_bin"
+	[[ -r "$interpreted_test" ]] || fail "missing interpreted application test at $interpreted_test"
 	[[ -f "$fixture_path" ]] || fail "missing fixture at $fixture_path"
 	[[ ! -d /run/systemd/system ]] || fail 'systemd unexpectedly detected in Upstart guest'
 	[[ -x /sbin/initctl ]] || fail '/sbin/initctl is missing'
@@ -287,6 +301,11 @@ post_reboot() {
 
 	"$daemon_bin" stop "$service_name"
 	"$daemon_bin" remove "$service_name"
+
+	current_scenario=interpreted-applications
+	log 'verifying symlinked native, shell, Python, and rejected direct-script applications'
+	verify_interpreted_applications
+
 	current_scenario=cleanup
 	collect_artifacts success
 	[[ ! -e "$service_path" ]] || fail 'Upstart job remains after final removal'

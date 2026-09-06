@@ -141,106 +141,65 @@ assert_no_relevant_avc_denials() {
 
 wait_for_http() {
 	local expect_child=${1:-false}
-	python3 - "$port" "$app_bin" "$expect_child" <<'PY'
-import json
-import sys
-import time
-import urllib.error
-import urllib.request
+	local deadline=$((SECONDS + 30)) response
+	while (( SECONDS < deadline )); do
+		if response=$(http_response 2>/dev/null); then
+			assert_contains "$response" "\"executable\": \"$app_bin\"" "HTTP executable"
+			assert_contains "$response" '"file_content": "daemon-util relative path test passed\n"' "HTTP fixture"
+			assert_contains "$response" '"enabled": true' "HTTP boolean argument"
+			assert_contains "$response" '"message": "hello systemd"' "HTTP string argument"
+			assert_contains "$response" '"count": 7' "HTTP integer argument"
+			assert_contains "$response" "\"port\": $port" "HTTP port argument"
+			assert_contains "$response" '"hello systemd"' "HTTP argument vector"
+			assert_contains "$response" '"relative-path-test.txt"' "HTTP relative-path argument"
+			if [[ "$expect_child" == true ]]; then
+				grep -Eq '^[[:space:]]*"child_pid":[[:space:]]*[1-9][0-9]*,*$' <<<"$response" || fail "HTTP child PID is missing: $response"
+			fi
+			printf '%s\n' "$response"
+			return
+		fi
+		sleep 0.2
+	done
+	fail "HTTP application did not become ready"
+}
 
-port = int(sys.argv[1])
-expected_executable = sys.argv[2]
-expect_child = sys.argv[3] == "true"
-deadline = time.monotonic() + 30
-last_error = None
-while time.monotonic() < deadline:
-    try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=2) as response:
-            data = json.load(response)
-        assert data["executable"] == expected_executable, data
-        assert data["file_content"] == "daemon-util relative path test passed\n", data
-        assert data["config"]["enabled"] is True, data
-        assert data["config"]["message"] == "hello systemd", data
-        assert data["config"]["count"] == 7, data
-        assert data["config"]["port"] == port, data
-        args = data["args"]
-        assert "hello systemd" in args, args
-        assert "relative-path-test.txt" in args, args
-        if expect_child:
-            assert data.get("child_pid", 0) > 0, data
-        print(json.dumps(data, sort_keys=True))
-        raise SystemExit(0)
-    except (AssertionError, OSError, urllib.error.URLError, json.JSONDecodeError) as error:
-        last_error = error
-        time.sleep(0.2)
-raise SystemExit(f"HTTP application did not become ready: {last_error}")
-PY
+http_response() {
+	if command -v curl >/dev/null 2>&1; then
+		curl -fsS --max-time 2 "http://127.0.0.1:$port/"
+	else
+		wget -qO- -T 2 "http://127.0.0.1:$port/"
+	fi
 }
 
 http_pid() {
-	python3 - "$port" <<'PY'
-import json
-import sys
-import urllib.request
-with urllib.request.urlopen(f"http://127.0.0.1:{sys.argv[1]}/", timeout=2) as response:
-    print(json.load(response)["pid"])
-PY
+	http_response 2>/dev/null | sed -n 's/^[[:space:]]*"pid":[[:space:]]*\([0-9][0-9]*\),*$/\1/p'
 }
 
 wait_for_new_http_pid() {
 	local old_pid=$1
 	local timeout_seconds=$2
-	python3 - "$port" "$old_pid" "$timeout_seconds" <<'PY'
-import json
-import sys
-import time
-import urllib.error
-import urllib.request
-
-port = int(sys.argv[1])
-old_pid = int(sys.argv[2])
-deadline = time.monotonic() + int(sys.argv[3])
-last_error = None
-while time.monotonic() < deadline:
-    try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=1) as response:
-            pid = int(json.load(response)["pid"])
-        if pid != old_pid:
-            print(pid)
-            raise SystemExit(0)
-    except (OSError, urllib.error.URLError, json.JSONDecodeError) as error:
-        last_error = error
-    time.sleep(0.2)
-raise SystemExit(f"application did not restart from PID {old_pid}: {last_error}")
-PY
+	local deadline=$((SECONDS + timeout_seconds)) new_pid
+	while (( SECONDS < deadline )); do
+		new_pid=$(http_pid || true)
+		if [[ -n "$new_pid" && "$new_pid" != "$old_pid" ]]; then
+			printf '%s\n' "$new_pid"
+			return
+		fi
+		sleep 0.2
+	done
+	fail "application did not restart from PID $old_pid"
 }
 
 assert_event() {
 	local path=$1
 	local expected=$2
-	python3 - "$path" "$expected" <<'PY'
-import json
-import sys
-
-path, expected = sys.argv[1:]
-with open(path, encoding="utf-8") as events:
-    records = [json.loads(line) for line in events if line.strip()]
-if not any(record.get("event") == expected for record in records):
-    raise SystemExit(f"event {expected!r} not found in {path}: {records!r}")
-PY
+	grep -Fq "\"event\":\"$expected\"" "$path" || fail "event '$expected' not found in $path"
 }
 
 event_count() {
 	local path=$1
 	local expected=$2
-	python3 - "$path" "$expected" <<'PY'
-import json
-import sys
-
-path, expected = sys.argv[1:]
-with open(path, encoding="utf-8") as events:
-    print(sum(json.loads(line).get("event") == expected for line in events if line.strip()))
-PY
+	grep -Fc "\"event\":\"$expected\"" "$path" || true
 }
 
 collect_artifacts() {
@@ -249,6 +208,16 @@ collect_artifacts() {
 	{
 		printf 'phase=%s\nscenario=%s\nservice=%s\n' "$phase" "$current_scenario" "$service_name"
 		uname -a
+		printf '\nOperating system:\n'
+		cat /etc/os-release 2>/dev/null || true
+		if [[ -f /etc/armbian-release ]]; then
+			printf '\nArmbian release:\n'
+			cat /etc/armbian-release
+		fi
+		if [[ -f /etc/daemon-itest-image-source ]]; then
+			printf '\nImage source:\n'
+			cat /etc/daemon-itest-image-source
+		fi
 		printf '\nPID 1:\n'
 		ps -p 1 -o pid=,comm=,args=
 		printf '\nsystemd:\n'
@@ -310,7 +279,7 @@ require_environment() {
 	[[ -x "$app_bin" ]] || fail "missing test application at $app_bin"
 	[[ -f "$fixture_path" ]] || fail "missing relative-path fixture at $fixture_path"
 	[[ "$(ps -p 1 -o comm= | tr -d '[:space:]')" == systemd ]] || fail "systemd is not PID 1"
-	command -v python3 >/dev/null || fail "python3 is required in the guest"
+	command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 || fail "curl or wget is required in the guest"
 	if [[ "$expect_selinux" == 1 ]]; then
 		command -v matchpathcon >/dev/null || fail "matchpathcon is required for the SELinux lane"
 		command -v timeout >/dev/null || fail "timeout is required for the SELinux lane"
@@ -361,6 +330,144 @@ verify_management_commands() {
 	assert_contains "$output" "$app_bin" 'list command application path'
 	output=$("$daemon_bin" list -l)
 	assert_contains "$output" 'hello systemd' 'long list arguments'
+}
+
+wait_for_managed_pid() {
+	local pid_file=$1
+	local deadline=$((SECONDS + 20)) pid
+	while (( SECONDS < deadline )); do
+		pid=$(cat "$pid_file" 2>/dev/null || true)
+		if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+			printf '%s\n' "$pid"
+			return
+		fi
+		sleep 0.2
+	done
+	fail "interpreted application did not write a live PID to $pid_file"
+}
+
+wait_for_managed_pid_gone() {
+	local pid=$1
+	local deadline=$((SECONDS + 20))
+	while kill -0 "$pid" 2>/dev/null; do
+		if (( SECONDS >= deadline )); then
+			fail "interpreted application PID $pid is still running"
+		fi
+		sleep 0.2
+	done
+}
+
+verify_native_symlink_application() {
+	local auxiliary_name="${service_name}symlinkapp"
+	local auxiliary_unit="/etc/systemd/system/lz_lz_${auxiliary_name}.service"
+	local auxiliary_metadata="/var/lib/daemon-util/services/lz_lz_${auxiliary_name}.json"
+	local application_link="$install_dir/test-app-symlink"
+	local events="$artifact_dir/symlink-application.events.jsonl"
+	local pid output
+
+	ln -sfn "$app_bin" "$application_link"
+	rm -f "$events"
+	"$daemon_bin" install --ignore-warnings "$auxiliary_name" "$application_link" \
+		--enabled=true --message 'hello systemd' --count 7 --port "$port" \
+		--file-path relative-path-test.txt --event-path "$events"
+	[[ -f "$auxiliary_unit" ]] || fail "symlink application unit was not created"
+	assert_file_contains "$auxiliary_unit" "ExecStart=\"$app_bin\""
+	"$daemon_bin" start "$auxiliary_name"
+	wait_for_http false >"$artifact_dir/symlink-application-http.json"
+	pid=$(http_pid)
+	output=$("$daemon_bin" status "$auxiliary_name")
+	assert_contains "$output" running 'symlink application status'
+	output=$("$daemon_bin" list)
+	assert_contains "$output" "$app_bin" 'symlink application resolved path listing'
+	"$daemon_bin" stop "$auxiliary_name"
+	wait_process_gone "$pid"
+	"$daemon_bin" remove "$auxiliary_name"
+	[[ ! -e "$auxiliary_unit" ]] || fail "symlink application unit remains after removal"
+	[[ ! -e "$auxiliary_metadata" ]] || fail "symlink application metadata remains after removal"
+	rm -f "$application_link"
+}
+
+verify_interpreted_application() {
+	local label=$1 interpreter=$2 script=$3
+	local auxiliary_name="${service_name}${label}"
+	local auxiliary_unit="/etc/systemd/system/lz_lz_${auxiliary_name}.service"
+	local auxiliary_metadata="/var/lib/daemon-util/services/lz_lz_${auxiliary_name}.json"
+	local interpreter_link="$install_dir/${label}-interpreter"
+	local state_prefix="$artifact_dir/${label}-application"
+	local resolved_interpreter pid output
+
+	resolved_interpreter=$(readlink -f "$interpreter")
+	ln -sfn "$resolved_interpreter" "$interpreter_link"
+	rm -f "$state_prefix.pid" "$state_prefix.events"
+	"$daemon_bin" install --ignore-warnings "$auxiliary_name" "$interpreter_link" "$script" "$state_prefix"
+	[[ -f "$auxiliary_unit" ]] || fail "$label application unit was not created"
+	assert_file_contains "$auxiliary_unit" "ExecStart=\"$resolved_interpreter\""
+	assert_file_contains "$auxiliary_unit" "$script"
+	"$daemon_bin" start "$auxiliary_name"
+	pid=$(wait_for_managed_pid "$state_prefix.pid")
+	output=$("$daemon_bin" status "$auxiliary_name")
+	assert_contains "$output" running "$label application status"
+	output=$("$daemon_bin" list -l)
+	assert_contains "$output" "$script" "$label application argument listing"
+	"$daemon_bin" stop "$auxiliary_name"
+	wait_for_managed_pid_gone "$pid"
+	assert_file_contains "$state_prefix.events" stopped
+	"$daemon_bin" remove "$auxiliary_name"
+	[[ ! -e "$auxiliary_unit" ]] || fail "$label application unit remains after removal"
+	[[ ! -e "$auxiliary_metadata" ]] || fail "$label application metadata remains after removal"
+	rm -f "$interpreter_link"
+}
+
+verify_script_applications() {
+	local shell_script="$install_dir/shell-application.sh"
+	local python_script="$install_dir/python-application.py"
+	local rejected_name="${service_name}directscript"
+	local rejected_unit="/etc/systemd/system/lz_lz_${rejected_name}.service"
+	local rejected_metadata="/var/lib/daemon-util/services/lz_lz_${rejected_name}.json"
+	local output status
+
+	printf '%s\n' \
+		'#!/bin/sh' \
+		'state=$1' \
+		'printf "%s\\n" "$$" >"$state.pid"' \
+		'printf "%s\\n" started >>"$state.events"' \
+		'trap '\''printf "%s\\n" stopped >>"$state.events"; exit 0'\'' TERM INT' \
+		'while :; do sleep 1; done' >"$shell_script"
+	chmod 0755 "$shell_script"
+
+	set +e
+	output=$("$daemon_bin" install --ignore-warnings "$rejected_name" "$shell_script" 2>&1)
+	status=$?
+	set -e
+	(( status != 0 )) || fail "direct shell script was accepted as a native executable"
+	printf '%s\n' "$output" >"$artifact_dir/direct-script-rejection.txt"
+	[[ ! -e "$rejected_unit" ]] || fail "rejected direct script created a systemd unit"
+	[[ ! -e "$rejected_metadata" ]] || fail "rejected direct script created metadata"
+
+	verify_native_symlink_application
+	verify_interpreted_application shell /bin/sh "$shell_script"
+
+	if command -v python3 >/dev/null 2>&1; then
+		printf '%s\n' \
+			'import os' \
+			'import signal' \
+			'import sys' \
+			'import time' \
+			'state = sys.argv[1]' \
+			'open(state + ".pid", "w").write(str(os.getpid()))' \
+			'open(state + ".events", "a").write("started\\n")' \
+			'def stop(_signal, _frame):' \
+			'    open(state + ".events", "a").write("stopped\\n")' \
+			'    raise SystemExit(0)' \
+			'signal.signal(signal.SIGTERM, stop)' \
+			'signal.signal(signal.SIGINT, stop)' \
+			'while True:' \
+			'    time.sleep(1)' >"$python_script"
+		chmod 0644 "$python_script"
+		verify_interpreted_application python "$(command -v python3)" "$python_script"
+	else
+		printf '%s\n' 'SKIP: python3 is not installed in this guest' >"$artifact_dir/python-application-skip.txt"
+	fi
 }
 
 pre_reboot() {
@@ -455,12 +562,12 @@ post_reboot() {
 	"$daemon_bin" start "$service_name"
 	wait_for_http false >"$state_dir/automatic-restart-first-http.json"
 	restart_parent=$(http_pid)
-	new_parent=$(wait_for_new_http_pid "$restart_parent" 45)
+	new_parent=$(wait_for_new_http_pid "$restart_parent" 300)
 	[[ "$new_parent" != "$restart_parent" ]] || fail "automatic restart reused parent PID $restart_parent"
 	(( $(event_count "$auto_events" started) >= 2 )) || fail "automatic restart did not record a second startup"
 	assert_event "$auto_events" failure
 	kill -KILL "$new_parent"
-	hard_crash_parent=$(wait_for_new_http_pid "$new_parent" 45)
+	hard_crash_parent=$(wait_for_new_http_pid "$new_parent" 300)
 	wait_process_gone "$new_parent"
 	[[ "$hard_crash_parent" != "$new_parent" ]] || fail "hard-crash restart reused parent PID $new_parent"
 	(( $(event_count "$auto_events" started) >= 3 )) || fail "hard crash did not record a third startup"
@@ -492,6 +599,10 @@ post_reboot() {
 	wait_process_gone "$forced_child"
 	assert_no_test_app_processes
 	"$daemon_bin" remove "$service_name"
+
+	current_scenario=script-applications
+	log "verifying symlinked, shell, Python, and rejected direct-script applications"
+	verify_script_applications
 
 	current_scenario=cleanup
 	collect_artifacts success

@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+
+export INTEGRATION_LANE_ID=dietpi
+export INTEGRATION_LANE_DISPLAY=DietPi
+export INTEGRATION_EXPECTED_GUEST_MARKER=DietPi
+export ARMBIAN_RELEASE=${DIETPI_RELEASE:-Trixie}
+export ARMBIAN_BOARD=${DIETPI_BOARD:-OrangePi5}
+export ARMBIAN_CODENAME=${DIETPI_CODENAME:-trixie}
+export ARMBIAN_KERNEL_BRANCH=${DIETPI_KERNEL_BRANCH:-current}
+export ARMBIAN_KERNEL_VERSION=${DIETPI_KERNEL_VERSION:-6.18.37}
+export ARMBIAN_IMAGE_NAME=${DIETPI_IMAGE_NAME:-DietPi_OrangePi5-ARMv8-Trixie.img.xz}
+export ARMBIAN_IMAGE_URL=${DIETPI_IMAGE_URL:-https://dietpi.com/downloads/images/$ARMBIAN_IMAGE_NAME}
+export ARMBIAN_CHECKSUM_URL=${DIETPI_CHECKSUM_URL:-$ARMBIAN_IMAGE_URL.sha256}
+export ARMBIAN_ROOT_PARTITION_NAME=${DIETPI_ROOT_PARTITION_NAME:-root}
+export ARMBIAN_ROOTFS_SIZE_MIB=${DIETPI_ROOTFS_SIZE_MIB:-3072}
+
+if [[ -n "${DIETPI_IMAGE:-}" ]]; then
+	export ARMBIAN_IMAGE=$DIETPI_IMAGE
+fi
+if [[ -n "${DIETPI_IMAGE_SHA256:-}" ]]; then
+	export ARMBIAN_IMAGE_SHA256=$DIETPI_IMAGE_SHA256
+fi
+
+exec "$script_dir/../armbian/run-qemu.sh" "$@"

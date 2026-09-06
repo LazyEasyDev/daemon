@@ -117,7 +117,8 @@ log 'building Linux/arm64 integration binaries'
 )
 printf '%s\n' 'daemon-util relative path test passed' >"$build_dir/relative-path-test.txt"
 cp "$script_dir/guest-test.sh" "$build_dir/guest-test.sh"
-chmod 0755 "$build_dir/daemon" "$build_dir/test-app" "$build_dir/guest-test.sh"
+cp "$repo_dir/integration_tests/interpreted-app-test.sh" "$build_dir/interpreted-app-test.sh"
+chmod 0755 "$build_dir/daemon" "$build_dir/test-app" "$build_dir/guest-test.sh" "$build_dir/interpreted-app-test.sh"
 
 ssh_options=(-i "$key_path" -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
 virsh_command() { virsh --connect "$libvirt_uri" "$@"; }
@@ -127,6 +128,7 @@ copy_artifacts() {
 	[[ "$remote_ready" == 1 && -n "$ip_address" ]] || return
 	mkdir -p "$artifact_dir/guest"
 	ssh_guest 'cat /etc/os-release; cat /proc/1/comm; cat /etc/init.d/rcS; ps w' >"$artifact_dir/guest/environment.txt" 2>&1 || true
+	scp "${ssh_options[@]}" -r "root@$ip_address:/var/tmp/daemon-itest-$service_name/artifacts/." "$artifact_dir/guest/" >/dev/null 2>&1 || true
 }
 cleanup() {
 	local status=$?
@@ -179,8 +181,8 @@ virt-install --connect "$libvirt_uri" --name "$domain_name" --memory "$vm_memory
 
 wait_for_ssh
 log "Buildroot guest is reachable at $ip_address"
-tar -C "$build_dir" -cf - daemon test-app relative-path-test.txt guest-test.sh | ssh_guest 'mkdir -p /opt/daemon-itest && tar -C /opt/daemon-itest -xf -'
-ssh_guest chmod 0755 /opt/daemon-itest/daemon /opt/daemon-itest/test-app /opt/daemon-itest/guest-test.sh
+tar -C "$build_dir" -cf - daemon test-app relative-path-test.txt guest-test.sh interpreted-app-test.sh | ssh_guest 'mkdir -p /opt/daemon-itest && tar -C /opt/daemon-itest -xf -'
+ssh_guest chmod 0755 /opt/daemon-itest/daemon /opt/daemon-itest/test-app /opt/daemon-itest/guest-test.sh /opt/daemon-itest/interpreted-app-test.sh
 ssh_guest /opt/daemon-itest/guest-test.sh pre-reboot "$service_name" "$port"
 boot_id=$(ssh_guest cat /proc/sys/kernel/random/boot_id)
 log 'rebooting Buildroot guest'

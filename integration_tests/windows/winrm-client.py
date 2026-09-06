@@ -47,7 +47,9 @@ def main() -> int:
 
     args = parser.parse_args()
     if args.action == "wait":
-        deadline = time.monotonic() + args.timeout
+        started = time.monotonic()
+        deadline = started + args.timeout
+        next_progress = started
         last_error = None
         while time.monotonic() < deadline:
             try:
@@ -60,6 +62,12 @@ def main() -> int:
                 last_error = result.std_err.decode("utf-8", "replace")
             except Exception as error:  # WinRM raises several transport-specific errors.
                 last_error = str(error)
+            now = time.monotonic()
+            if now >= next_progress:
+                elapsed = int(now - started)
+                detail = f": {last_error}" if last_error else ""
+                print(f"waiting for WinRM ({elapsed}s elapsed){detail}", file=sys.stderr, flush=True)
+                next_progress = now + 60
             time.sleep(10)
         print(f"timed out waiting for WinRM: {last_error}", file=sys.stderr)
         return 1

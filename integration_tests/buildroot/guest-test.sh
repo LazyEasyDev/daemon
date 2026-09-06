@@ -6,13 +6,18 @@ phase=${1:?phase is required}
 service_name=${2:?service name is required}
 port=${3:-18080}
 install_dir=/opt/daemon-itest
+daemon_bin="$install_dir/daemon"
 registration_name="lz_lz_${service_name}"
 service_path="/etc/init.d/S90$registration_name"
 app="$install_dir/test-app"
+app_bin=$app
 fixture="$install_dir/relative-path-test.txt"
+interpreted_test="$install_dir/interpreted-app-test.sh"
 events="$install_dir/buildroot-events.jsonl"
 pidfile="/var/run/$registration_name.pid"
 identityfile="${pidfile}.identity"
+state_dir="/var/tmp/daemon-itest-$service_name"
+artifact_dir="$state_dir/artifacts"
 
 log() {
 	printf '[buildroot-itest] %s\n' "$*"
@@ -21,6 +26,21 @@ log() {
 fail() {
 	printf '[buildroot-itest] ERROR: %s\n' "$*" >&2
 	exit 1
+}
+
+. "$interpreted_test"
+
+interpreted_definition_path() {
+	printf '/etc/init.d/S90lz_lz_%s\n' "$1"
+}
+
+interpreted_removed() {
+	auxiliary=$1
+	registration="lz_lz_$1"
+	[ ! -e "/etc/init.d/S90$registration" ] || fail "auxiliary Buildroot service remains: $registration"
+	[ ! -e "/var/lib/daemon-util/services/${registration}.json" ] || fail "auxiliary metadata remains: $auxiliary"
+	[ ! -e "/var/run/${registration}.pid" ] || fail "auxiliary PID file remains: $registration"
+	[ ! -e "/var/run/${registration}.pid.identity" ] || fail "auxiliary identity file remains: $registration"
 }
 
 process_is_test_app() {
@@ -89,7 +109,9 @@ require_buildroot() {
 	command -v start-stop-daemon >/dev/null || fail 'start-stop-daemon is missing'
 	[ -x "$install_dir/daemon" ] || fail 'daemon binary is missing'
 	[ -x "$app" ] || fail 'test app binary is missing'
+	[ -r "$interpreted_test" ] || fail 'interpreted application test is missing'
 	[ -f "$fixture" ] || fail 'fixture is missing'
+	mkdir -p "$artifact_dir"
 }
 
 case "$phase" in
@@ -177,6 +199,8 @@ case "$phase" in
 		[ ! -e "$service_path" ] || fail 'Buildroot S90 service script remains after remove'
 		[ ! -e "$pidfile" ] || fail 'Buildroot PID file remains after remove'
 		[ ! -e "$identityfile" ] || fail 'Buildroot identity file remains after remove'
+		log 'verifying symlinked native, shell, optional Python, and rejected direct-script applications'
+		verify_interpreted_applications
 		log 'post-reboot checks passed'
 		;;
 	*)

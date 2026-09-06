@@ -15,6 +15,7 @@ metadata_path="/var/lib/daemon-util/services/${registration_name}.json"
 state_dir="$install_dir/state-$service_name"
 artifact_dir="$state_dir/artifacts"
 fixture_path="$install_dir/relative-path-test.txt"
+interpreted_test="$install_dir/interpreted-app-test.sh"
 current_scenario=initialization
 
 log() {
@@ -24,6 +25,20 @@ log() {
 fail() {
 	printf '[openwrt-itest] ERROR: %s\n' "$*" >&2
 	return 1
+}
+
+. "$interpreted_test"
+
+interpreted_definition_path() {
+	printf '/etc/init.d/lz_lz_%s\n' "$1"
+}
+
+interpreted_removed() {
+	auxiliary=$1
+	registration="lz_lz_$1"
+	[ ! -e "/etc/init.d/$registration" ] || fail "auxiliary procd service remains: $registration"
+	[ ! -e "/etc/rc.d/S98$registration" ] || fail "auxiliary procd enablement remains: $registration"
+	[ ! -e "/var/lib/daemon-util/services/${registration}.json" ] || fail "auxiliary metadata remains: $auxiliary"
 }
 
 assert_contains() {
@@ -71,7 +86,11 @@ assert_no_test_app_processes() {
 }
 
 http_response() {
-	uclient-fetch -qO- "http://127.0.0.1:$port/"
+	if command -v uclient-fetch >/dev/null 2>&1; then
+		uclient-fetch -qO- "http://127.0.0.1:$port/"
+	else
+		wget -qO- "http://127.0.0.1:$port/"
+	fi
 }
 
 wait_for_http() {
@@ -132,7 +151,15 @@ collect_artifacts() {
 	{
 		printf 'phase=%s\nscenario=%s\nservice=%s\n' "$phase" "$current_scenario" "$service_name"
 		uname -a
-		cat /etc/openwrt_release
+		cat /etc/openwrt_release 2>/dev/null || cat /etc/os-release
+		if [ -f /etc/daemon-itest-friendlywrt-source ]; then
+			printf '\nFriendlyWrt source:\n'
+			cat /etc/daemon-itest-friendlywrt-source
+		fi
+		if [ -f /etc/daemon-itest-image-source ]; then
+			printf '\nImage source:\n'
+			cat /etc/daemon-itest-image-source
+		fi
 		printf '\nPID 1:\n'
 		cat /proc/1/comm
 	} >"$artifact_dir/${label}-environment.txt" 2>&1 || true
@@ -170,14 +197,19 @@ trap on_exit EXIT
 
 require_environment() {
 	[ "$(id -u)" -eq 0 ] || fail "guest test must run as root"
-	grep -qi openwrt /etc/os-release || fail "guest is not OpenWrt"
+	if [ -f /etc/openwrt_release ]; then
+		grep -Eqi 'openwrt|immortalwrt' /etc/openwrt_release || fail "guest is not OpenWrt-compatible"
+	else
+		grep -qi openwrt /etc/os-release || fail "guest is not OpenWrt-compatible"
+	fi
 	[ -x "$daemon_bin" ] || fail "missing daemon binary at $daemon_bin"
 	[ -x "$app_bin" ] || fail "missing test application at $app_bin"
+	[ -r "$interpreted_test" ] || fail "missing interpreted application test at $interpreted_test"
 	[ -f "$fixture_path" ] || fail "missing relative-path fixture at $fixture_path"
 	[ -x /etc/rc.common ] || fail "/etc/rc.common is missing"
 	command -v procd >/dev/null || fail "procd is required in the guest"
 	command -v ubus >/dev/null || fail "ubus is required in the guest"
-	command -v uclient-fetch >/dev/null || fail "uclient-fetch is required in the guest"
+	command -v uclient-fetch >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 || fail "uclient-fetch or wget is required in the guest"
 	mkdir -p "$state_dir" "$artifact_dir"
 }
 
@@ -329,6 +361,10 @@ post_reboot() {
 	wait_process_gone "$forced_parent"
 	assert_no_test_app_processes
 	"$daemon_bin" remove "$service_name"
+
+	current_scenario=interpreted-applications
+	log 'verifying symlinked native, shell, optional Python, and rejected direct-script applications'
+	verify_interpreted_applications
 
 	current_scenario=cleanup
 	collect_artifacts success

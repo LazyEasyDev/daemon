@@ -156,7 +156,8 @@ log 'building Linux/arm64 integration binaries'
 )
 printf '%s\n' 'daemon-util relative path test passed' >"$build_dir/relative-path-test.txt"
 cp "$script_dir/guest-test.sh" "$build_dir/guest-test.sh"
-chmod 0755 "$build_dir/daemon" "$build_dir/test-app" "$build_dir/guest-test.sh"
+cp "$repo_dir/integration_tests/interpreted-app-test.sh" "$build_dir/interpreted-app-test.sh"
+chmod 0755 "$build_dir/daemon" "$build_dir/test-app" "$build_dir/guest-test.sh" "$build_dir/interpreted-app-test.sh"
 
 ssh_options=(-i "$key_path" -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
 virsh_command() { virsh --connect "$libvirt_uri" "$@"; }
@@ -264,12 +265,13 @@ ssh_guest sudo -n true
 ssh_guest initctl version 2>&1 | grep -qi upstart || fail 'guest PID 1 is not Upstart'
 
 log 'copying integration payload'
-scp "${ssh_options[@]}" "$build_dir/daemon" "$build_dir/test-app" "$build_dir/relative-path-test.txt" "$build_dir/guest-test.sh" "$ssh_user@$ip_address:/tmp/"
+scp "${ssh_options[@]}" "$build_dir/daemon" "$build_dir/test-app" "$build_dir/relative-path-test.txt" "$build_dir/guest-test.sh" "$build_dir/interpreted-app-test.sh" "$ssh_user@$ip_address:/tmp/"
 ssh_guest sudo install -d -m 0755 /opt/daemon-itest
 ssh_guest sudo install -m 0755 /tmp/daemon /opt/daemon-itest/daemon
 ssh_guest sudo install -m 0755 /tmp/test-app /opt/daemon-itest/test-app
 ssh_guest sudo install -m 0644 /tmp/relative-path-test.txt /opt/daemon-itest/relative-path-test.txt
 ssh_guest sudo install -m 0755 /tmp/guest-test.sh /opt/daemon-itest/guest-test.sh
+ssh_guest sudo install -m 0755 /tmp/interpreted-app-test.sh /opt/daemon-itest/interpreted-app-test.sh
 
 log 'running pre-reboot Upstart application checks'
 ssh_guest sudo /opt/daemon-itest/guest-test.sh pre-reboot "$service_name" "$port"

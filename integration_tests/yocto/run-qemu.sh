@@ -133,12 +133,13 @@ log 'building Linux/arm64 integration binaries'
 )
 printf '%s\n' 'daemon-util relative path test passed' >"$build_dir/relative-path-test.txt"
 cp "$script_dir/guest-test.sh" "$build_dir/guest-test.sh"
+cp "$repo_dir/integration_tests/interpreted-app-test.sh" "$build_dir/interpreted-app-test.sh"
 cp "$script_dir/boot-test.sh" "$build_dir/boot-test.sh"
 cat >"$build_dir/test-config" <<EOF
 SERVICE_NAME='$service_name'
 TEST_APP_PORT='$port'
 EOF
-chmod 0755 "$build_dir/daemon" "$build_dir/test-app" "$build_dir/guest-test.sh" "$build_dir/boot-test.sh"
+chmod 0755 "$build_dir/daemon" "$build_dir/test-app" "$build_dir/guest-test.sh" "$build_dir/interpreted-app-test.sh" "$build_dir/boot-test.sh"
 chmod 0644 "$build_dir/relative-path-test.txt" "$build_dir/test-config"
 
 debugfs_mkdir() {
@@ -158,6 +159,7 @@ debugfs_mkdir /var/lib/daemon-itest
 debugfs_write "$build_dir/daemon" /opt/daemon-itest/daemon 0100755
 debugfs_write "$build_dir/test-app" /opt/daemon-itest/test-app 0100755
 debugfs_write "$build_dir/guest-test.sh" /opt/daemon-itest/guest-test.sh 0100755
+debugfs_write "$build_dir/interpreted-app-test.sh" /opt/daemon-itest/interpreted-app-test.sh 0100755
 debugfs_write "$build_dir/relative-path-test.txt" /opt/daemon-itest/relative-path-test.txt 0100644
 debugfs_write "$build_dir/test-config" /opt/daemon-itest/test-config 0100644
 debugfs_write "$build_dir/boot-test.sh" /etc/init.d/daemon-itest-boot 0100755

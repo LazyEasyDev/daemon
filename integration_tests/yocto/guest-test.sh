@@ -18,6 +18,7 @@ lockfile="/var/lock/subsys/$registration_name"
 state_dir="/var/tmp/daemon-itest-$service_name"
 artifact_dir="$state_dir/artifacts"
 fixture_path="$install_dir/relative-path-test.txt"
+interpreted_test="$install_dir/interpreted-app-test.sh"
 current_scenario=initialization
 
 log() {
@@ -27,6 +28,22 @@ log() {
 fail() {
 	printf '[yocto-itest] ERROR: %s\n' "$*" >&2
 	exit 1
+}
+
+. "$interpreted_test"
+
+interpreted_definition_path() {
+	printf '/etc/init.d/lz_lz_%s\n' "$1"
+}
+
+interpreted_removed() {
+	auxiliary=$1
+	registration="lz_lz_$1"
+	[ ! -e "/etc/init.d/$registration" ] || fail "auxiliary System V script remains: $registration"
+	[ ! -e "/var/lib/daemon-util/services/${registration}.json" ] || fail "auxiliary metadata remains: $auxiliary"
+	[ ! -e "/var/run/${registration}.pid" ] || fail "auxiliary PID file remains: $registration"
+	[ ! -e "/var/run/${registration}.pid.identity" ] || fail "auxiliary identity file remains: $registration"
+	[ ! -e "/var/run/${registration}.watchdog.pid" ] || fail "auxiliary watchdog PID remains: $registration"
 }
 
 assert_contains() {
@@ -246,6 +263,7 @@ require_environment() {
 	[ "$(id -u)" -eq 0 ] || fail 'guest test must run as root'
 	[ -x "$daemon_bin" ] || fail "missing daemon binary at $daemon_bin"
 	[ -x "$app_bin" ] || fail "missing test application at $app_bin"
+	[ -r "$interpreted_test" ] || fail "missing interpreted application test at $interpreted_test"
 	[ -f "$fixture_path" ] || fail "missing relative-path fixture at $fixture_path"
 	[ "$(uname -m)" = aarch64 ] || fail 'Yocto guest is not ARM64'
 	[ "$(cat /proc/1/comm)" = init ] || fail 'System V init is not PID 1'
@@ -447,6 +465,10 @@ post_reboot() {
 	wait_process_gone "$forced_child"
 	assert_no_test_app_processes
 	"$daemon_bin" remove "$service_name"
+
+	current_scenario=interpreted-applications
+	log 'verifying symlinked native, shell, optional Python, and rejected direct-script applications'
+	verify_interpreted_applications
 
 	current_scenario=cleanup
 	collect_artifacts success

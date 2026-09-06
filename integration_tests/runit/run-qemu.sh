@@ -131,12 +131,13 @@ log 'building Linux/arm64 integration binaries'
 )
 printf '%s\n' 'daemon-util relative path test passed' >"$build_dir/relative-path-test.txt"
 cp "$script_dir/guest-test.sh" "$build_dir/guest-test.sh"
+cp "$repo_dir/integration_tests/interpreted-app-test.sh" "$build_dir/interpreted-app-test.sh"
 cp "$script_dir/boot-test.sh" "$build_dir/boot-test.sh"
 cat >"$build_dir/test-config" <<EOF
 SERVICE_NAME='$service_name'
 TEST_APP_PORT='$port'
 EOF
-chmod 0755 "$build_dir/daemon" "$build_dir/test-app" "$build_dir/guest-test.sh" "$build_dir/boot-test.sh"
+chmod 0755 "$build_dir/daemon" "$build_dir/test-app" "$build_dir/guest-test.sh" "$build_dir/interpreted-app-test.sh" "$build_dir/boot-test.sh"
 chmod 0644 "$build_dir/relative-path-test.txt" "$build_dir/test-config"
 
 log "creating writable Void runit root filesystem (${rootfs_size_mib} MiB)"
@@ -153,6 +154,7 @@ fakeroot -- sh -eu -c '
 	install -m 0755 "$build/daemon" "$root/opt/daemon-itest/daemon"
 	install -m 0755 "$build/test-app" "$root/opt/daemon-itest/test-app"
 	install -m 0755 "$build/guest-test.sh" "$root/opt/daemon-itest/guest-test.sh"
+	install -m 0755 "$build/interpreted-app-test.sh" "$root/opt/daemon-itest/interpreted-app-test.sh"
 	install -m 0755 "$build/boot-test.sh" "$root/etc/sv/daemon-itest-boot/run"
 	install -m 0644 "$build/relative-path-test.txt" "$root/opt/daemon-itest/relative-path-test.txt"
 	install -m 0644 "$build/test-config" "$root/opt/daemon-itest/test-config"

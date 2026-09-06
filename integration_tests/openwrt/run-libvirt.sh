@@ -183,7 +183,8 @@ log "building Linux/arm64 integration binaries"
 )
 printf '%s\n' 'daemon-util relative path test passed' >"$build_dir/relative-path-test.txt"
 cp "$script_dir/guest-test.sh" "$build_dir/guest-test.sh"
-chmod 0755 "$build_dir/daemon" "$build_dir/test-app" "$build_dir/guest-test.sh"
+cp "$repo_dir/integration_tests/interpreted-app-test.sh" "$build_dir/interpreted-app-test.sh"
+chmod 0755 "$build_dir/daemon" "$build_dir/test-app" "$build_dir/guest-test.sh" "$build_dir/interpreted-app-test.sh"
 
 ssh_options=(
 	-i "$key_path"
@@ -333,7 +334,7 @@ log "guest address: $ip_address"
 wait_for_ssh
 
 log "copying integration payload"
-tar -C "$build_dir" -cf - daemon test-app relative-path-test.txt guest-test.sh |
+tar -C "$build_dir" -cf - daemon test-app relative-path-test.txt guest-test.sh interpreted-app-test.sh |
 	ssh "${ssh_options[@]}" "$ssh_user@$ip_address" \
 		'mkdir -p /tmp/daemon-payload && tar -C /tmp/daemon-payload -xf -'
 ssh_guest mkdir -p /opt/daemon-itest
@@ -341,7 +342,8 @@ ssh_guest cp /tmp/daemon-payload/daemon /opt/daemon-itest/daemon
 ssh_guest cp /tmp/daemon-payload/test-app /opt/daemon-itest/test-app
 ssh_guest cp /tmp/daemon-payload/relative-path-test.txt /opt/daemon-itest/relative-path-test.txt
 ssh_guest cp /tmp/daemon-payload/guest-test.sh /opt/daemon-itest/guest-test.sh
-ssh_guest chmod 0755 /opt/daemon-itest/daemon /opt/daemon-itest/test-app /opt/daemon-itest/guest-test.sh
+ssh_guest cp /tmp/daemon-payload/interpreted-app-test.sh /opt/daemon-itest/interpreted-app-test.sh
+ssh_guest chmod 0755 /opt/daemon-itest/daemon /opt/daemon-itest/test-app /opt/daemon-itest/guest-test.sh /opt/daemon-itest/interpreted-app-test.sh
 ssh_guest chmod 0644 /opt/daemon-itest/relative-path-test.txt
 
 log "running pre-reboot lifecycle checks"

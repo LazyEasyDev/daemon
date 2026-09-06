@@ -9,28 +9,57 @@ cache_dir=${INTEGRATION_CACHE_DIR:-/var/tmp/daemon-util-integration-cache-$(id -
 tool_root=${WINDOWS_TOOL_ROOT:-/var/tmp/daemon-windows-qemu-root}
 tool_packages=${WINDOWS_TOOL_PACKAGES:-/var/tmp/daemon-windows-qemu-packages}
 artifact_root=${INTEGRATION_ARTIFACT_DIR:-$repo_dir/integration_tests/artifacts}
+server_version=${WINDOWS_SERVER_VERSION:-2019}
+case "$server_version" in
+	2019)
+		default_iso_filename=17763.737.190906-2324.rs5_release_svc_refresh_SERVER_EVAL_x64FRE_en-us_1.iso
+		default_iso_url="https://software-download.microsoft.com/download/sg/$default_iso_filename"
+		default_iso_sha256=549bca46c055157291be6c22a3aaaed8330e78ef4382c99ee82c896426a1cee1
+		default_base_disk=windows-server-2019-eval-core.qcow2
+		artifact_prefix=windows
+		minimum_download_install_bytes=12000000000
+		minimum_install_bytes=7000000000
+		minimum_resume_bytes=2000000000
+		default_vm_install_timeout=14400
+		;;
+	2025)
+		default_iso_filename=26100.32230.260111-0550.lt_release_svc_refresh_SERVER_EVAL_x64FRE_en-us.iso
+		default_iso_url="https://software-static.download.prss.microsoft.com/dbazure/998969d5-f34g-4e03-ac9d-1f9786c66749/$default_iso_filename"
+		default_iso_sha256=7b052573ba7894c9924e3e87ba732ccd354d18cb75a883efa9b900ea125bfd51
+		default_base_disk=windows-server-2025-eval-core.qcow2
+		artifact_prefix=windows-2025
+		minimum_download_install_bytes=18000000000
+		minimum_install_bytes=10000000000
+		minimum_resume_bytes=2000000000
+		default_vm_install_timeout=21600
+		;;
+	*)
+		printf '[windows-vm] ERROR: WINDOWS_SERVER_VERSION must be 2019 or 2025\n' >&2
+		exit 1
+		;;
+esac
 run_id=$(date -u +%Y%m%dT%H%M%SZ)-$$
-artifact_dir="$artifact_root/windows-$run_id"
+artifact_dir="$artifact_root/$artifact_prefix-$run_id"
 work_dir=${VM_WORK_DIR:-/var/tmp/daemon-windows-itest-$run_id}
 
-iso_filename=${WINDOWS_ISO_FILENAME:-17763.737.190906-2324.rs5_release_svc_refresh_SERVER_EVAL_x64FRE_en-us_1.iso}
-iso_url=${WINDOWS_ISO_URL:-https://software-download.microsoft.com/download/sg/$iso_filename}
+iso_filename=${WINDOWS_ISO_FILENAME:-$default_iso_filename}
+iso_url=${WINDOWS_ISO_URL:-$default_iso_url}
 iso_path=${WINDOWS_ISO:-$cache_dir/$iso_filename}
-default_iso_sha256=549bca46c055157291be6c22a3aaaed8330e78ef4382c99ee82c896426a1cee1
 if [[ -n "${WINDOWS_ISO:-}" ]]; then
 	iso_sha256=${WINDOWS_ISO_SHA256:-}
 else
 	iso_sha256=${WINDOWS_ISO_SHA256:-$default_iso_sha256}
 fi
-base_disk=${WINDOWS_BASE_IMAGE:-$cache_dir/windows-server-2019-eval-core.qcow2}
+base_disk=${WINDOWS_BASE_IMAGE:-$cache_dir/$default_base_disk}
 base_marker="$base_disk.ready"
 admin_user=${WINDOWS_ADMIN_USER:-Administrator}
 admin_password=${WINDOWS_ADMIN_PASSWORD:-DaemonTest!2026}
 vm_memory_mib=${VM_MEMORY_MIB:-2560}
 vm_vcpus=${VM_VCPUS:-2}
 vm_disk_gib=${VM_DISK_GIB:-40}
-vm_install_timeout=${VM_INSTALL_TIMEOUT:-14400}
+vm_install_timeout=${VM_INSTALL_TIMEOUT:-$default_vm_install_timeout}
 vm_boot_timeout=${VM_BOOT_TIMEOUT:-1800}
+winrm_operation_timeout=${WINDOWS_WINRM_OPERATION_TIMEOUT:-180}
 winrm_port=${WINDOWS_WINRM_PORT:-55985}
 app_host_port=${WINDOWS_APP_HOST_PORT:-58080}
 payload_port=${WINDOWS_PAYLOAD_PORT:-58081}
@@ -48,13 +77,13 @@ log() { printf '[windows-vm] %s\n' "$*"; }
 fail() { printf '[windows-vm] ERROR: %s\n' "$*" >&2; return 1; }
 require_command() { command -v "$1" >/dev/null 2>&1 || fail "required command '$1' is not installed"; }
 
-for command in apt-get base64 dd dpkg-deb genisoimage go python3 qemu-img sha256sum ss wget; do
+for command in apt-get base64 dd dpkg-deb genisoimage go python3 qemu-img sed sha256sum ss wget; do
 	require_command "$command"
 done
 
 host_arch=$(uname -m)
 if [[ "$host_arch" != x86_64 && "$host_arch" != amd64 ]]; then
-	log "host is $host_arch; Windows Server 2019 will use slow x86-64 TCG emulation"
+	log "host is $host_arch; Windows Server $server_version will use slow x86-64 TCG emulation"
 fi
 
 mkdir -p "$cache_dir" "$artifact_dir" "$work_dir" "$tool_root" "$tool_packages"
@@ -98,11 +127,27 @@ export WINDOWS_ADMIN_USER="$admin_user"
 export WINDOWS_ADMIN_PASSWORD="$admin_password"
 
 winrm() {
-	python3 "$winrm_client" "$@"
+	python3 "$winrm_client" --operation-timeout "$winrm_operation_timeout" "$@"
 }
 
 winrm_ps() {
 	winrm run "$1"
+}
+
+winrm_ps_retry() {
+	local script=$1 attempts=${2:-8} delay=${3:-15}
+	local attempt output
+	for (( attempt=1; attempt<=attempts; attempt++ )); do
+		if output=$(winrm_ps "$script" 2>>"$artifact_dir/winrm-retry.log"); then
+			printf '%s\n' "$output"
+			return
+		fi
+		if (( attempt < attempts )); then
+			log "WinRM command attempt $attempt/$attempts failed; retrying in ${delay}s" >&2
+			sleep "$delay"
+		fi
+	done
+	fail "WinRM command failed after $attempts attempts"
 }
 
 port_is_free() {
@@ -115,10 +160,12 @@ done
 
 available_bytes=$(df --output=avail -B1 "$cache_dir" | tail -n 1 | tr -d ' ')
 if [[ ! -f "$base_marker" ]]; then
-	if [[ ! -f "$iso_path" && "$available_bytes" -lt 12000000000 ]]; then
-		fail 'at least 12 GB free space is required to download and install Windows Server 2019'
-	elif [[ -f "$iso_path" && "$available_bytes" -lt 7000000000 ]]; then
-		fail 'at least 7 GB free space is required to install Windows Server 2019 from the cached ISO'
+	if [[ -f "$base_disk" && "$available_bytes" -lt "$minimum_resume_bytes" ]]; then
+		fail "insufficient free space to resume the Windows Server $server_version base installation"
+	elif [[ ! -f "$base_disk" && ! -f "$iso_path" && "$available_bytes" -lt "$minimum_download_install_bytes" ]]; then
+		fail "insufficient free space to download and install Windows Server $server_version"
+	elif [[ ! -f "$base_disk" && -f "$iso_path" && "$available_bytes" -lt "$minimum_install_bytes" ]]; then
+		fail "insufficient free space to install Windows Server $server_version from the cached ISO"
 	fi
 fi
 
@@ -137,7 +184,7 @@ verify_iso() {
 
 if [[ ! -f "$iso_path" ]]; then
 	[[ -z "${WINDOWS_ISO:-}" ]] || fail "WINDOWS_ISO does not exist: $iso_path"
-	log "downloading official Windows Server 2019 evaluation ISO (4.9 GiB)"
+	log "downloading official Windows Server $server_version evaluation ISO"
 	wget --continue --progress=dot:giga -O "$iso_path.partial" "$iso_url"
 	mv "$iso_path.partial" "$iso_path"
 fi
@@ -174,12 +221,7 @@ path, key = sys.argv[1:]
 for _ in range(20):
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-			client.settimeout(2)
             client.connect(path)
-			try:
-				client.recv(4096)
-			except TimeoutError:
-				pass
             client.sendall((f"sendkey {key}\n").encode())
         break
     except OSError:
@@ -277,7 +319,7 @@ prepare_unattended_media() {
   </settings>
   <settings pass="specialize">
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-      <ComputerName>DAEMON-WIN2019</ComputerName><TimeZone>UTC</TimeZone><RegisteredOwner>daemon-itest</RegisteredOwner><RegisteredOrganization>daemon-itest</RegisteredOrganization>
+			<ComputerName>DAEMON-WIN$server_version</ComputerName><TimeZone>UTC</TimeZone><RegisteredOwner>daemon-itest</RegisteredOwner><RegisteredOrganization>daemon-itest</RegisteredOrganization>
     </component>
   </settings>
   <settings pass="oobeSystem">
@@ -305,9 +347,9 @@ try {
     & winrm.cmd set winrm/config/service '@{AllowUnencrypted="true"}'
     & winrm.cmd set winrm/config/service/auth '@{Basic="true"}'
     & netsh.exe advfirewall firewall add rule name="daemon-itest WinRM" dir=in action=allow protocol=TCP localport=5985
-    & netsh.exe advfirewall firewall add rule name="daemon-itest app" dir=in action=allow protocol=TCP localport=18080
-	& netsh.exe interface portproxy delete v4tov4 listenaddress=10.0.2.15 listenport=18080 2>$null
-	& netsh.exe interface portproxy add v4tov4 listenaddress=10.0.2.15 listenport=18080 connectaddress=127.0.0.1 connectport=18080
+    & netsh.exe advfirewall firewall add rule name="daemon-itest app" dir=in action=allow protocol=TCP localport=__APP_PORT__
+	& netsh.exe interface portproxy delete v4tov4 listenaddress=10.0.2.15 listenport=__APP_PORT__ 2>$null
+	& netsh.exe interface portproxy add v4tov4 listenaddress=10.0.2.15 listenport=__APP_PORT__ connectaddress=127.0.0.1 connectport=__APP_PORT__
     Set-Service -Name iphlpsvc -StartupType Automatic
     Start-Service -Name iphlpsvc
     New-Item -ItemType File -Path C:\daemon-winrm-ready.txt -Force | Out-Null
@@ -316,24 +358,25 @@ try {
     throw
 }
 EOF
+	sed -i "s/__APP_PORT__/$app_port/g" "$answer_dir/bootstrap.ps1"
 	genisoimage -quiet -J -r -V DAEMONCFG -o "$work_dir/config.iso" "$answer_dir"
 	chmod 0644 "$work_dir/config.iso"
 }
 
-install_base_image() {
-	[[ -z "${WINDOWS_BASE_IMAGE:-}" ]] || fail "WINDOWS_BASE_IMAGE is not prepared (missing $base_marker)"
-	log 'creating Windows Server 2019 base disk'
-	qemu-img create -q -f qcow2 "$base_disk" "${vm_disk_gib}G"
-	chmod 0644 "$base_disk"
-	prepare_unattended_media
+finalize_base_image() {
 	installation_active=1
-	log "starting unattended Server Core installation; VNC is localhost:$((5900 + vnc_display))"
-	launch_qemu "$base_disk" install
 	if ! winrm wait --timeout "$vm_install_timeout"; then
 		fail "Windows installation did not reach WinRM; inspect $artifact_dir/qemu-install.log or VNC localhost:$((5900 + vnc_display))"
 	fi
 	remote_ready=1
-	winrm_ps "if (-not (Test-Path C:\\daemon-winrm-ready.txt)) { throw 'bootstrap marker is missing' }; (Get-CimInstance Win32_OperatingSystem).Caption"
+	if ! winrm_ps "if (-not (Test-Path C:\\daemon-winrm-ready.txt)) { exit 1 }" >/dev/null 2>>"$artifact_dir/winrm-retry.log"; then
+		log 'first-logon bootstrap is incomplete; repairing guest networking configuration through WinRM'
+		winrm_ps "if (Test-Path C:\\daemon-bootstrap-error.txt) { Get-Content C:\\daemon-bootstrap-error.txt }" >"$artifact_dir/bootstrap-error.txt" 2>&1 || true
+		winrm_ps_retry "\$ErrorActionPreference='Stop'; New-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' -Name LocalAccountTokenFilterPolicy -PropertyType DWord -Value 1 -Force | Out-Null; & netsh.exe advfirewall firewall delete rule name='daemon-itest app' | Out-Null; & netsh.exe advfirewall firewall add rule name='daemon-itest app' dir=in action=allow protocol=TCP localport=$app_port | Out-Null; if (\$LASTEXITCODE -ne 0) { throw 'failed to add application firewall rule' }; & netsh.exe interface portproxy delete v4tov4 listenaddress=10.0.2.15 listenport=$app_port | Out-Null; & netsh.exe interface portproxy add v4tov4 listenaddress=10.0.2.15 listenport=$app_port connectaddress=127.0.0.1 connectport=$app_port | Out-Null; if (\$LASTEXITCODE -ne 0) { throw 'failed to add application port proxy' }; Set-Service -Name iphlpsvc -StartupType Automatic; if ((Get-Service -Name iphlpsvc).Status -ne 'Running') { Start-Service -Name iphlpsvc }; New-Item -ItemType File -Path C:\\daemon-winrm-ready.txt -Force | Out-Null"
+	fi
+	guest_caption=$(winrm_ps_retry "if (-not (Test-Path C:\\daemon-winrm-ready.txt)) { throw 'bootstrap marker is missing' }; (Get-CimInstance Win32_OperatingSystem).Caption" | tr -d '\r')
+	grep -Fq "$server_version" <<<"$guest_caption" || fail "installed guest is not Windows Server $server_version: $guest_caption"
+	log "installed $guest_caption"
 	log 'Windows base installation completed; shutting down cleanly'
 	winrm_ps 'Stop-Computer -Force' >/dev/null 2>&1 || true
 	wait_qemu_exit 600 || fail 'Windows base VM did not power off'
@@ -341,6 +384,25 @@ install_base_image() {
 	installation_active=0
 	touch "$base_marker"
 	rm -rf "$work_dir/answer" "$work_dir/config.iso"
+}
+
+install_base_image() {
+	[[ -z "${WINDOWS_BASE_IMAGE:-}" ]] || fail "WINDOWS_BASE_IMAGE is not prepared (missing $base_marker)"
+	log "creating Windows Server $server_version base disk"
+	qemu-img create -q -f qcow2 "$base_disk" "${vm_disk_gib}G"
+	chmod 0644 "$base_disk"
+	prepare_unattended_media
+	log "starting unattended Server Core installation; VNC is localhost:$((5900 + vnc_display))"
+	launch_qemu "$base_disk" install
+	finalize_base_image
+}
+
+resume_base_image() {
+	[[ -z "${WINDOWS_BASE_IMAGE:-}" ]] || fail "WINDOWS_BASE_IMAGE is not prepared (missing $base_marker)"
+	log "resuming unmarked Windows Server $server_version base installation"
+	qemu-img check "$base_disk" >"$artifact_dir/resumed-base-image-check.txt"
+	launch_qemu "$base_disk" resume
+	finalize_base_image
 }
 
 collect_artifacts() {
@@ -373,9 +435,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [[ ! -f "$base_disk" || ! -f "$base_marker" ]]; then
+if [[ "${WINDOWS_RESET_BASE:-0}" == 1 ]]; then
 	rm -f "$base_disk" "$base_marker"
 	install_base_image
+elif [[ ! -f "$base_disk" ]]; then
+	rm -f "$base_marker"
+	install_base_image
+elif [[ ! -f "$base_marker" ]]; then
+	resume_base_image
 fi
 
 log 'creating disposable Windows test overlay'
@@ -385,6 +452,9 @@ chmod 0644 "$overlay"
 launch_qemu "$overlay" test
 winrm wait --timeout "$vm_boot_timeout"
 remote_ready=1
+guest_caption=$(winrm_ps_retry '(Get-CimInstance Win32_OperatingSystem).Caption' | tr -d '\r')
+grep -Fq "$server_version" <<<"$guest_caption" || fail "guest base image is not Windows Server $server_version: $guest_caption"
+printf '%s\n' "$guest_caption" >"$artifact_dir/guest-caption.txt"
 
 build_dir="$work_dir/payload"
 mkdir -p "$build_dir"
@@ -404,10 +474,10 @@ sleep 1
 winrm_ps "New-Item -ItemType Directory -Path C:\\daemon-itest -Force | Out-Null; \$wc=New-Object Net.WebClient; \$wc.DownloadFile('http://10.0.2.2:$payload_port/daemon.exe','C:\\daemon-itest\\daemon.exe'); \$wc.DownloadFile('http://10.0.2.2:$payload_port/test-app.exe','C:\\daemon-itest\\test-app.exe'); \$wc.DownloadFile('http://10.0.2.2:$payload_port/test-app-replacement.exe','C:\\daemon-itest\\test-app-replacement.exe'); \$wc.DownloadFile('http://10.0.2.2:$payload_port/relative-path-test.txt','C:\\daemon-itest\\relative-path-test.txt'); \$wc.DownloadFile('http://10.0.2.2:$payload_port/guest-test.ps1','C:\\daemon-itest\\guest-test.ps1')"
 
 log 'running pre-reboot Windows application checks'
-winrm_ps "& C:\\daemon-itest\\guest-test.ps1 -Phase pre-reboot -ServiceName '$service_name' -Port $app_port"
+winrm_ps "& C:\\daemon-itest\\guest-test.ps1 -Phase pre-reboot -ServiceName '$service_name' -Port $app_port -ExpectedMessage 'hello windows server $server_version'"
 
 host_response=$(wget -q -O - --timeout=10 "http://127.0.0.1:$app_host_port/")
-grep -Fq 'hello windows server 2019' <<<"$host_response" || fail 'host-visible Windows app response has the wrong message'
+grep -Fq "hello windows server $server_version" <<<"$host_response" || fail 'host-visible Windows app response has the wrong message'
 grep -Fq 'daemon-util relative path test passed' <<<"$host_response" || fail 'host-visible Windows app response is missing fixture content'
 printf '%s\n' "$host_response" >"$artifact_dir/pre-reboot-host-http.json"
 
@@ -450,10 +520,11 @@ done
 log "host-observed hard crash recovered PID $old_pid as $new_pid"
 
 log 'testing Windows running-image and replacement-after-stop semantics'
-winrm_ps "& C:\\daemon-itest\\guest-test.ps1 -Phase hot-replacement -ServiceName '$service_name' -Port $app_port"
+winrm_ps "& C:\\daemon-itest\\guest-test.ps1 -Phase hot-replacement -ServiceName '$service_name' -Port $app_port -ExpectedMessage 'hello windows server $server_version'"
 
 log 'running post-reboot Windows lifecycle and recovery checks'
-winrm_ps "& C:\\daemon-itest\\guest-test.ps1 -Phase post-reboot -ServiceName '$service_name' -Port $app_port"
+winrm_ps "& C:\\daemon-itest\\guest-test.ps1 -Phase post-reboot -ServiceName '$service_name' -Port $app_port -ExpectedMessage 'hello windows server $server_version'"
 collect_artifacts
 remote_ready=0
-log 'Windows Server 2019 real application-level test passed'
+printf 'PASS Windows Server %s\n' "$server_version" >"$artifact_dir/result.txt"
+log "Windows Server $server_version real application-level test passed"

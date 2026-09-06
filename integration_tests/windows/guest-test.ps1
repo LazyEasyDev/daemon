@@ -4,7 +4,9 @@ param(
     [string]$Phase,
     [Parameter(Mandatory = $true)]
     [string]$ServiceName,
-    [int]$Port = 18080
+    [int]$Port = 18080,
+    [Parameter(Mandatory = $true)]
+    [string]$ExpectedMessage
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,6 +20,8 @@ $MetadataPath = Join-Path $env:ProgramData "daemon-util\services\$RegistrationNa
 $ArtifactDir = Join-Path $InstallDir "artifacts"
 $BootEvents = Join-Path $InstallDir "boot-events.jsonl"
 $RestartEvents = Join-Path $InstallDir "restart-events.jsonl"
+$ForcedEvents = Join-Path $InstallDir "forced-events.jsonl"
+$ChildPIDPath = Join-Path $InstallDir "child.pid"
 
 function Write-TestLog([string]$Message) {
     Write-Host "[windows-itest] $Message"
@@ -46,7 +50,7 @@ function Wait-App([int]$TimeoutSeconds = 90) {
         try {
             $response = Get-AppResponse
             if ($response.executable -eq $App -and
-                $response.config.message -eq "hello windows server 2019" -and
+                $response.config.message -eq $ExpectedMessage -and
                 [int]$response.config.count -eq 7 -and
                 $response.file_content -match "daemon-util relative path test passed") {
                 return $response
@@ -129,13 +133,18 @@ function Remove-TestService {
     Remove-Item $MetadataPath -Force -ErrorAction SilentlyContinue
 }
 
-function Install-TestService([string]$Events, [string[]]$ExtraArguments = @()) {
+function Install-TestService(
+    [string]$Events,
+    [string[]]$ExtraArguments = @(),
+    [string]$StopTimeout = "5s"
+) {
     Remove-Item $Events -Force -ErrorAction SilentlyContinue
+    Remove-Item $ChildPIDPath -Force -ErrorAction SilentlyContinue
     $arguments = @(
-        "install", "--stop-timeout", "5s", "--ignore-warnings",
+        "install", "--stop-timeout", $StopTimeout, "--ignore-warnings",
         $ServiceName, $App,
         "--enabled=true",
-        "--message", "hello windows server 2019",
+        "--message", $ExpectedMessage,
         "--count", "7",
         "--port", "$Port",
         "--file-path", "relative-path-test.txt",
@@ -158,9 +167,11 @@ function Verify-ServiceDefinition {
 function Verify-ManagementCommands {
     $status = (& $Daemon status $ServiceName 2>&1 | Out-String)
     Assert-True ($LASTEXITCODE -eq 0 -and $status -match "running") "daemon status does not report running"
-    $list = (& $Daemon list -l 2>&1 | Out-String)
+    $list = (& $Daemon list 2>&1 | Out-String)
     Assert-True ($LASTEXITCODE -eq 0 -and $list -match [regex]::Escape($ServiceName)) "daemon list omits the service"
-    Assert-True ($list -match "hello windows server 2019") "daemon list omits application arguments"
+    $longList = (& $Daemon list -l 2>&1 | Out-String)
+    Assert-True ($LASTEXITCODE -eq 0 -and $longList -match [regex]::Escape($ServiceName)) "daemon long list omits the service"
+    Assert-True ($longList -match [regex]::Escape($ExpectedMessage)) "daemon long list omits application arguments"
     Assert-True ((Get-Service -Name $RegistrationName).Status -eq "Running") "SCM does not report Running"
 }
 
@@ -171,7 +182,7 @@ function Save-Artifacts([string]$Label) {
     (& sc.exe qc $RegistrationName 2>&1 | Out-String) | Out-File (Join-Path $ArtifactDir "$Label-sc-qc.txt")
     (& sc.exe qfailure $RegistrationName 2>&1 | Out-String) | Out-File (Join-Path $ArtifactDir "$Label-sc-qfailure.txt")
     Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $App } | ConvertTo-Json -Depth 4 | Out-File (Join-Path $ArtifactDir "$Label-processes.json")
-    Copy-Item $BootEvents, $RestartEvents -Destination $ArtifactDir -Force -ErrorAction SilentlyContinue
+    Copy-Item $BootEvents, $RestartEvents, $ForcedEvents -Destination $ArtifactDir -Force -ErrorAction SilentlyContinue
 }
 
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
@@ -307,6 +318,36 @@ switch ($Phase) {
         Assert-True (-not (Get-Service -Name $RegistrationName -ErrorAction SilentlyContinue)) "service remains after final removal"
         Assert-True (-not (Test-Path $MetadataPath)) "metadata remains after final removal"
         Assert-NoAppProcesses
+
+        Write-TestLog "verifying forced timeout and Job Object child cleanup"
+        Install-TestService -Events $ForcedEvents -ExtraArguments @(
+            "--stop_delay", "30s",
+            "--spawn-child=true",
+            "--child-pid-path", $ChildPIDPath
+        ) -StopTimeout "2s"
+        Verify-ServiceDefinition
+        Invoke-Daemon @("start", $ServiceName)
+        $forced = Wait-App
+        $forcedPid = [int]$forced.pid
+        $childPid = [int]$forced.child_pid
+        Assert-True ($childPid -gt 0) "spawned child PID is missing from the application response"
+        Assert-True (Test-Path $ChildPIDPath) "spawned child PID file is missing"
+        Assert-True ([int](Get-Content $ChildPIDPath -Raw) -eq $childPid) "spawned child PID file does not match the application response"
+
+        $stopStarted = Get-Date
+        Invoke-Daemon @("stop", $ServiceName)
+        $elapsed = ((Get-Date) - $stopStarted).TotalSeconds
+        Assert-True ($elapsed -ge 2 -and $elapsed -lt 20) "forced stop duration was $elapsed seconds"
+        Assert-True ((Get-EventCount $ForcedEvents "signal") -ge 1) "forced-stop signal event is missing"
+        Assert-True ((Get-EventCount $ForcedEvents "stopped") -eq 0) "application completed gracefully despite forced termination"
+        Wait-AppProcessGone $forcedPid
+        Wait-AppProcessGone $childPid
+        Assert-NoAppProcesses
+        Assert-True ((Get-Service -Name $RegistrationName).Status -eq "Stopped") "SCM does not report Stopped after forced termination"
+        Save-Artifacts "forced-stop"
+        Invoke-Daemon @("remove", $ServiceName)
+        Assert-True (-not (Get-Service -Name $RegistrationName -ErrorAction SilentlyContinue)) "service remains after forced-stop removal"
+        Assert-True (-not (Test-Path $MetadataPath)) "metadata remains after forced-stop removal"
         Save-Artifacts "success"
         Write-TestLog "all Windows application-level tests passed"
     }

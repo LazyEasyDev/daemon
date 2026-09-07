@@ -242,7 +242,7 @@ manager, so small behavioral differences between platforms are expected.
 | --- | --- |
 | Windows | Sends `CTRL_BREAK_EVENT`, then terminates the Job Object after the timeout |
 | systemd | Stops processes remaining in the service control group |
-| OpenRC | Stops the supervised process group |
+| OpenRC | Uses native `supervise-daemon` process-group and optional cgroup cleanup; escaped or outliving descendants are not guaranteed |
 | System V | Validates and signals the recorded main PID; descendant cleanup is not guaranteed |
 | Buildroot | Uses `start-stop-daemon` for the validated main PID; descendant cleanup is not guaranteed |
 | runit | Starts a dedicated process group and signals it through runit control hooks |

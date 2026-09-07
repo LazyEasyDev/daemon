@@ -228,6 +228,7 @@ func TestOpenRCRespawnsWithoutRetryLimit(t *testing.T) {
 	for _, setting := range []string{
 		"supervisor=supervise-daemon",
 		"stopgroup=true",
+		"rc_cgroup_cleanup=yes",
 		"respawn_delay=30",
 		"respawn_max=0",
 	} {

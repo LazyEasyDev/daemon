@@ -159,7 +159,9 @@ for port in "$winrm_port" "$app_host_port" "$payload_port"; do
 done
 
 available_bytes=$(df --output=avail -B1 "$cache_dir" | tail -n 1 | tr -d ' ')
-if [[ ! -f "$base_marker" ]]; then
+if [[ -f "$base_marker" ]]; then
+	[[ "$available_bytes" -ge "$minimum_resume_bytes" ]] || fail "insufficient free space to create a Windows Server $server_version test overlay"
+else
 	if [[ -f "$base_disk" && "$available_bytes" -lt "$minimum_resume_bytes" ]]; then
 		fail "insufficient free space to resume the Windows Server $server_version base installation"
 	elif [[ ! -f "$base_disk" && ! -f "$iso_path" && "$available_bytes" -lt "$minimum_download_install_bytes" ]]; then
@@ -182,15 +184,17 @@ verify_iso() {
 	fi
 }
 
-if [[ ! -f "$iso_path" ]]; then
-	[[ -z "${WINDOWS_ISO:-}" ]] || fail "WINDOWS_ISO does not exist: $iso_path"
-	log "downloading official Windows Server $server_version evaluation ISO"
-	wget --continue --progress=dot:giga -O "$iso_path.partial" "$iso_url"
-	mv "$iso_path.partial" "$iso_path"
+if [[ "${WINDOWS_RESET_BASE:-0}" == 1 || ! -f "$base_disk" ]]; then
+	if [[ ! -f "$iso_path" ]]; then
+		[[ -z "${WINDOWS_ISO:-}" ]] || fail "WINDOWS_ISO does not exist: $iso_path"
+		log "downloading official Windows Server $server_version evaluation ISO"
+		wget --continue --progress=dot:giga -O "$iso_path.partial" "$iso_url"
+		mv "$iso_path.partial" "$iso_path"
+	fi
+	verify_iso
+	chmod 0644 "$iso_path"
+	iso_path=$(readlink -f "$iso_path")
 fi
-verify_iso
-chmod 0644 "$iso_path"
-iso_path=$(readlink -f "$iso_path")
 
 qemu_is_running() {
 	[[ -n "$qemu_pid" ]] && kill -0 "$qemu_pid" >/dev/null 2>&1

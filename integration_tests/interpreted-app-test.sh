@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Shared application-level coverage for Linux service-manager guests.
+# Shared application-level coverage for Unix service-manager guests.
 # The caller must define daemon_bin, install_dir, artifact_dir, service_name,
 # fail(), and optional interpreted_definition_path()/interpreted_removed().
 
@@ -14,16 +14,25 @@ interpreted_assert_contains() {
 	esac
 }
 
+interpreted_resolve_path() {
+	interpreted_path=$(readlink -f "$1" 2>/dev/null || true)
+	if [ -z "$interpreted_path" ] && command -v realpath >/dev/null 2>&1; then
+		interpreted_path=$(realpath "$1" 2>/dev/null || true)
+	fi
+	[ -n "$interpreted_path" ] || fail "could not resolve native executable path: $1"
+	printf '%s\n' "$interpreted_path"
+}
+
 interpreted_wait_for_pid() {
 	interpreted_pid_file=$1
 	interpreted_attempt=0
-	while [ "$interpreted_attempt" -lt 100 ]; do
+	while [ "$interpreted_attempt" -lt 30 ]; do
 		interpreted_pid=$(cat "$interpreted_pid_file" 2>/dev/null || true)
 		if [ -n "$interpreted_pid" ] && kill -0 "$interpreted_pid" 2>/dev/null; then
 			printf '%s\n' "$interpreted_pid"
 			return 0
 		fi
-		sleep 0.2
+		sleep 1
 		interpreted_attempt=$((interpreted_attempt + 1))
 	done
 	fail "interpreted application did not write a live PID to $interpreted_pid_file"
@@ -33,8 +42,8 @@ interpreted_wait_for_pid_gone() {
 	interpreted_pid=$1
 	interpreted_attempt=0
 	while kill -0 "$interpreted_pid" 2>/dev/null; do
-		[ "$interpreted_attempt" -lt 100 ] || fail "interpreted application PID $interpreted_pid is still running"
-		sleep 0.2
+		[ "$interpreted_attempt" -lt 30 ] || fail "interpreted application PID $interpreted_pid is still running"
+		sleep 1
 		interpreted_attempt=$((interpreted_attempt + 1))
 	done
 }
@@ -44,14 +53,27 @@ interpreted_http_response() {
 		curl -fsS --max-time 2 "http://127.0.0.1:$port/"
 	elif command -v wget >/dev/null 2>&1; then
 		wget -qO- -T 2 "http://127.0.0.1:$port/"
-	else
+	elif command -v uclient-fetch >/dev/null 2>&1; then
 		uclient-fetch -qO- "http://127.0.0.1:$port/"
+	elif command -v fetch >/dev/null 2>&1; then
+		fetch -qo - "http://127.0.0.1:$port/"
+	elif command -v bash >/dev/null 2>&1; then
+		bash -c '
+			exec 3<>"/dev/tcp/127.0.0.1/$1" || exit 1
+			printf "GET / HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n" >&3
+			while IFS= read -r line <&3; do
+				[ "$line" = "$(printf "\r")" ] && break
+			done
+			cat <&3
+		' bash "$port"
+	else
+		fail 'no supported HTTP client is installed in the guest'
 	fi
 }
 
 interpreted_wait_for_native_app() {
 	interpreted_attempt=0
-	while [ "$interpreted_attempt" -lt 100 ]; do
+	while [ "$interpreted_attempt" -lt 30 ]; do
 		interpreted_response=$(interpreted_http_response 2>/dev/null || true)
 		case "$interpreted_response" in
 			*'"message": "hello symlink"'*)
@@ -59,7 +81,7 @@ interpreted_wait_for_native_app() {
 				return 0
 				;;
 		esac
-		sleep 0.2
+		sleep 1
 		interpreted_attempt=$((interpreted_attempt + 1))
 	done
 	fail 'symlinked native application did not become ready'
@@ -107,11 +129,16 @@ interpreted_verify_one() {
 	interpreted_auxiliary_name="${service_name}${interpreted_label}app"
 	interpreted_interpreter_link="$install_dir/${interpreted_label}-interpreter"
 	interpreted_state="$artifact_dir/${interpreted_label}-application"
-	interpreted_resolved=$(readlink -f "$interpreted_interpreter")
+	interpreted_resolved=$(interpreted_resolve_path "$interpreted_interpreter")
+	interpreted_applet=
+	case "${interpreted_resolved##*/}" in
+		busybox|busybox.*|toybox|toybox.*) interpreted_applet=${interpreted_interpreter##*/} ;;
+	esac
 
 	ln -sfn "$interpreted_resolved" "$interpreted_interpreter_link"
 	rm -f "$interpreted_state.pid" "$interpreted_state.events"
-	"$daemon_bin" install --ignore-warnings "$interpreted_auxiliary_name" "$interpreted_interpreter_link" "$interpreted_script" "$interpreted_state"
+	"$daemon_bin" install --ignore-warnings "$interpreted_auxiliary_name" "$interpreted_interpreter_link" \
+		${interpreted_applet:+"$interpreted_applet"} "$interpreted_script" "$interpreted_state"
 
 	if command -v interpreted_definition_path >/dev/null 2>&1; then
 		interpreted_definition=$(interpreted_definition_path "$interpreted_auxiliary_name")
@@ -185,7 +212,13 @@ while True:
     time.sleep(1)
 INTERPRETED_PYTHON_EOF
 		chmod 0644 "$interpreted_python_script"
-		interpreted_verify_one python "$(command -v python3)" "$interpreted_python_script"
+		if [ "$(uname -s)" = Linux ]; then
+			interpreted_python_executable=$(python3 -c 'import os; print(os.readlink("/proc/self/exe"))')
+		else
+			interpreted_python_executable=$(python3 -c 'import os, sys; print(os.path.realpath(sys.executable))')
+		fi
+		[ -x "$interpreted_python_executable" ] || fail "Python did not report a native executable: $interpreted_python_executable"
+		interpreted_verify_one python "$interpreted_python_executable" "$interpreted_python_script"
 	else
 		printf '%s\n' 'SKIP: python3 is not installed in this guest' >"$artifact_dir/python-application-skip.txt"
 	fi

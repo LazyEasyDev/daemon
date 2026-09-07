@@ -275,6 +275,7 @@ verify_definition() {
 	assert_file_contains "$service_path" "directory='$install_dir'"
 	assert_file_contains "$service_path" 'supervisor=supervise-daemon'
 	assert_file_contains "$service_path" 'stopgroup=true'
+	assert_file_contains "$service_path" 'rc_cgroup_cleanup=yes'
 	assert_file_contains "$service_path" 'respawn_delay=30'
 	assert_file_contains "$service_path" 'respawn_max=0'
 	if grep -Eq 'stop_pre\(\)|stop_post\(\)|daemon_stop_process_group|kill[[:space:]]+-KILL' "$service_path"; then
@@ -297,21 +298,16 @@ verify_management_commands() {
 
 pre_reboot() {
 	local events="$install_dir/boot-events.jsonl"
-	local child_pid
 	current_scenario=pre-reboot
 	log "installing boot-persistence scenario"
 	cleanup_service
 	install_scenario 5s "$events" \
-		--stop_delay 1s \
-		--spawn-child=true \
-		--child-pid-path child.pid
+		--stop_delay 1s
 	verify_definition
 	assert_file_contains "$service_path" 'retry="TERM/5/KILL/5"'
 	"$daemon_bin" start "$service_name"
-	wait_for_http true >"$state_dir/pre-reboot-http.json"
+	wait_for_http false >"$state_dir/pre-reboot-http.json"
 	verify_management_commands
-	child_pid=$(cat "$install_dir/child.pid")
-	process_is_test_app "$child_pid" || fail "child process $child_pid is not running"
 	http_pid >"$state_dir/pre-reboot-parent.pid"
 	collect_artifacts pre-reboot
 	log "pre-reboot checks passed"
@@ -319,36 +315,33 @@ pre_reboot() {
 
 post_reboot() {
 	local boot_events="$install_dir/boot-events.jsonl"
-	local restart_parent restart_child new_parent
-	local hot_parent hot_child hot_new_parent replacement
+	local restart_parent new_parent
+	local hot_parent hot_new_parent replacement
 	local graceful_started graceful_elapsed
 	local auto_events="$install_dir/restart-events.jsonl"
 	local forced_events="$install_dir/forced-events.jsonl"
-	local forced_child forced_started forced_elapsed
+	local forced_started forced_elapsed
 
 	current_scenario=post-reboot
 	log "verifying boot persistence"
 	[[ -e "$runlevel_link" ]] || fail "service lost default-runlevel enablement after reboot"
-	wait_for_http true >"$state_dir/post-reboot-http.json"
+	wait_for_http false >"$state_dir/post-reboot-http.json"
 	(( $(event_count "$boot_events" started) >= 2 )) || fail "service did not record a second startup after reboot"
 	verify_management_commands
 
 	current_scenario=explicit-restart
 	restart_parent=$(http_pid)
-	restart_child=$(cat "$install_dir/child.pid")
 	"$daemon_bin" restart "$service_name"
 	new_parent=$(wait_for_new_http_pid "$restart_parent" 20)
 	[[ "$new_parent" != "$restart_parent" ]] || fail "restart reused parent PID $restart_parent"
-	wait_for_http true >"$state_dir/restart-http.json"
+	wait_for_http false >"$state_dir/restart-http.json"
 	wait_process_gone "$restart_parent"
-	wait_process_gone "$restart_child"
 	assert_event "$boot_events" signal
 	assert_event "$boot_events" stopped
 
 	current_scenario=hot-replacement
 	log "verifying status, list, and stop after atomic executable replacement"
 	hot_parent=$(http_pid)
-	hot_child=$(cat "$install_dir/child.pid")
 	replacement="$install_dir/.test-app.replacement.$$"
 	cp -p "$app_bin" "$replacement"
 	mv -f "$replacement" "$app_bin"
@@ -359,10 +352,9 @@ post_reboot() {
 	assert_contains "$(rc-service "$registration_name" status 2>&1 || true)" 'started' 'OpenRC status after hot replacement'
 	"$daemon_bin" stop "$service_name"
 	wait_process_gone "$hot_parent"
-	wait_process_gone "$hot_child"
 	assert_contains "$(rc-service "$registration_name" status 2>&1 || true)" 'stopped' 'OpenRC status after hot-replacement stop'
 	"$daemon_bin" start "$service_name"
-	wait_for_http true >"$state_dir/hot-replacement-http.json"
+	wait_for_http false >"$state_dir/hot-replacement-http.json"
 	hot_new_parent=$(http_pid)
 	[[ "$hot_new_parent" != "$hot_parent" ]] || fail "hot-replacement restart reused PID $hot_parent"
 	verify_management_commands
@@ -393,15 +385,12 @@ post_reboot() {
 	"$daemon_bin" remove "$service_name"
 
 	current_scenario=forced-stop
-	log "verifying timeout escalation and process-group cleanup"
+	log "verifying timeout escalation for the supervised main process"
 	install_scenario 2s "$forced_events" \
-		--stop_delay 30s \
-		--spawn-child=true \
-		--child-pid-path child.pid
+		--stop_delay 30s
 	assert_file_contains "$service_path" 'retry="TERM/2/KILL/5"'
 	"$daemon_bin" start "$service_name"
-	wait_for_http true >"$state_dir/forced-stop-http.json"
-	forced_child=$(cat "$install_dir/child.pid")
+	wait_for_http false >"$state_dir/forced-stop-http.json"
 	forced_started=$(date +%s)
 	"$daemon_bin" stop "$service_name"
 	forced_elapsed=$(($(date +%s) - forced_started))
@@ -411,7 +400,6 @@ post_reboot() {
 	if grep -Fq '"event":"stopped"' "$forced_events"; then
 		fail "application reported graceful completion despite forced termination"
 	fi
-	wait_process_gone "$forced_child"
 	assert_no_test_app_processes
 	"$daemon_bin" remove "$service_name"
 

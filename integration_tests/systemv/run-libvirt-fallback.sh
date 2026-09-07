@@ -179,7 +179,8 @@ log "building Linux/$go_arch integration binaries"
 )
 printf '%s\n' 'daemon-util relative path test passed' >"$build_dir/relative-path-test.txt"
 cp "$script_dir/guest-test.sh" "$build_dir/guest-test.sh"
-chmod 0755 "$build_dir/daemon" "$build_dir/test-app" "$build_dir/guest-test.sh"
+cp "$repo_dir/integration_tests/interpreted-app-test.sh" "$build_dir/interpreted-app-test.sh"
+chmod 0755 "$build_dir/daemon" "$build_dir/test-app" "$build_dir/guest-test.sh" "$build_dir/interpreted-app-test.sh"
 
 ssh_options=(
 	-i "$key_path"
@@ -389,12 +390,14 @@ scp "${ssh_options[@]}" \
 	"$build_dir/test-app" \
 	"$build_dir/relative-path-test.txt" \
 	"$build_dir/guest-test.sh" \
+	"$build_dir/interpreted-app-test.sh" \
 	"$ssh_user@$ip_address:/tmp/"
 ssh_guest_retry sudo install -d -m 0755 /opt/daemon-itest
 ssh_guest_retry sudo install -m 0755 /tmp/daemon /opt/daemon-itest/daemon
 ssh_guest_retry sudo install -m 0755 /tmp/test-app /opt/daemon-itest/test-app
 ssh_guest_retry sudo install -m 0644 /tmp/relative-path-test.txt /opt/daemon-itest/relative-path-test.txt
 ssh_guest_retry sudo install -m 0755 /tmp/guest-test.sh /opt/daemon-itest/guest-test.sh
+ssh_guest_retry sudo install -m 0755 /tmp/interpreted-app-test.sh /opt/daemon-itest/interpreted-app-test.sh
 
 log "running pre-reboot lifecycle checks"
 ssh_guest_retry sudo /opt/daemon-itest/guest-test.sh pre-reboot "$service_name" "$port"

@@ -16,6 +16,7 @@ child_pidfile="/var/run/$registration_name.child.pid"
 state_dir="/var/tmp/daemon-itest-$service_name"
 artifact_dir="$state_dir/artifacts"
 fixture_path="$install_dir/relative-path-test.txt"
+interpreted_test="$install_dir/interpreted-app-test.sh"
 current_scenario=initialization
 
 log() {
@@ -25,6 +26,21 @@ log() {
 fail() {
 	printf '[freebsd-itest] ERROR: %s\n' "$*" >&2
 	return 1
+}
+
+. "$interpreted_test"
+
+interpreted_definition_path() {
+	printf '/usr/local/etc/rc.d/lz_lz_%s\n' "$1"
+}
+
+interpreted_removed() {
+	auxiliary=$1
+	registration="lz_lz_$1"
+	[ ! -e "/usr/local/etc/rc.d/$registration" ] || fail "auxiliary FreeBSD service remains: $registration"
+	[ ! -e "/var/db/daemon-util/services/${registration}.json" ] || fail "auxiliary metadata remains: $auxiliary"
+	[ ! -e "/var/run/${registration}.pid" ] || fail "auxiliary supervisor PID remains: $registration"
+	[ ! -e "/var/run/${registration}.child.pid" ] || fail "auxiliary child PID remains: $registration"
 }
 
 assert_contains() {
@@ -175,6 +191,7 @@ require_environment() {
 	[ "$(uname -s)" = FreeBSD ] || fail "guest test requires FreeBSD"
 	[ -x "$daemon_bin" ] || fail "missing daemon binary at $daemon_bin"
 	[ -x "$app_bin" ] || fail "missing test application at $app_bin"
+	[ -r "$interpreted_test" ] || fail "missing interpreted application test at $interpreted_test"
 	[ -f "$fixture_path" ] || fail "missing relative-path fixture at $fixture_path"
 	[ -x /usr/sbin/daemon ] || fail "/usr/sbin/daemon is missing"
 	command -v fetch >/dev/null || fail "fetch is required in the guest"
@@ -334,6 +351,10 @@ post_reboot() {
 	wait_process_gone "$forced_parent"
 	assert_no_test_app_processes
 	"$daemon_bin" remove "$service_name"
+
+	current_scenario=interpreted-applications
+	log "verifying symlinked native, shell, optional Python, and rejected direct-script applications"
+	verify_interpreted_applications
 
 	current_scenario=cleanup
 	collect_artifacts success

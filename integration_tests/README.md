@@ -10,6 +10,13 @@ the original PID and service status remain stable, stop the old image, and
 confirm the next start uses a new PID. Windows Server verifies the corresponding
 NTFS/SCM behavior with distinct binary hashes and a replacement-backed restart.
 
+The live Unix lanes also verify a native executable installed through a
+symlink, a shell script passed as an argument to a native shell interpreter,
+and rejection of a script passed directly as the executable. They run the same
+argument-hosted test through Python when Python is installed in the guest. The
+Windows lane performs the equivalent symlinked-PE, PowerShell-hosted,
+direct-script-rejection, and optional-Python checks.
+
 ## Current coverage
 
 The systemd lane verifies:
@@ -68,8 +75,9 @@ lifecycle on the image's XFS root filesystem.
 
 The OpenRC lane performs the same application-level lifecycle checks and also
 verifies its generated `openrc-run` script, `supervise-daemon` configuration,
-default-runlevel registration, respawn behavior, process-group cleanup, and
-atomic executable replacement.
+default-runlevel registration, respawn behavior, native stop escalation, and
+atomic executable replacement. It does not promise cleanup of descendants that
+outlive or escape the supervised main process.
 
 The Gentoo lane runs those OpenRC checks against an official ARM64 Gentoo
 OpenRC stage3. It uses serial-only direct QEMU boot, verifies the published
@@ -86,10 +94,15 @@ verifies SCM registration, automatic startup, recovery actions, external HTTP
 behavior, configured-failure and hard-crash recovery, reboot persistence,
 running-image replacement with hash verification, graceful and forced stop
 behavior, Job Object descendant cleanup, metadata cleanup, and service removal.
+It additionally verifies a symlinked PE application, a PowerShell script passed
+to the native PowerShell executable, direct PowerShell-script rejection, and a
+Python-hosted application when Python is present.
 
 The FreeBSD lane verifies the rc.d backend, `/usr/sbin/daemon` supervision,
 supervisor and application PID files, boot enablement, restart behavior,
-atomic executable replacement, graceful and forced shutdown, and removal.
+atomic executable replacement, native-executable symlink resolution,
+interpreter-hosted scripts, direct-script rejection, graceful and forced
+shutdown, and removal.
 
 The OpenWrt lane verifies procd backend detection, generated `rc.common`
 scripts, boot enablement, respawn behavior, atomic executable replacement, stop
@@ -704,6 +717,8 @@ Useful overrides:
 | `BUILDROOT_OUTPUT_ROOT` | `/var/tmp/daemon-buildroot-matrix` | Per-profile output root |
 | `BUILDROOT_PROFILES` | `baseline,debug,release` | Comma-separated profile list |
 | `JOBS` | Host CPU count | Parallel build jobs |
+| `BUILDROOT_KEEP_BUILD_TREES` | `0` | Set to `1` to retain large per-profile compiler and target trees |
+| `BUILDROOT_RESUME` | `0` | Set to `1` to resume profiles with an existing output configuration |
 
 Example building two profiles only:
 
@@ -716,6 +731,13 @@ The builder writes a manifest at:
 - `BUILDROOT_OUTPUT_ROOT/manifest.tsv`
 
 Each row contains the generated kernel and rootfs image paths for one profile.
+Run the application regression against each generated profile with:
+
+```sh
+for profile in baseline debug release; do
+  BUILDROOT_PROFILE="$profile" ./integration_tests/buildroot/run-libvirt.sh
+done
+```
 
 ## Safety
 

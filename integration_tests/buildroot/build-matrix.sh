@@ -11,6 +11,8 @@ output_root=${BUILDROOT_OUTPUT_ROOT:-/var/tmp/daemon-buildroot-matrix}
 profiles_csv=${BUILDROOT_PROFILES:-baseline,debug,release}
 jobs=${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)}
 kernel_fragment=${BUILDROOT_KERNEL_FRAGMENT:-$script_dir/fragments/linux-libvirt-aarch64.fragment}
+keep_build_trees=${BUILDROOT_KEEP_BUILD_TREES:-0}
+resume_builds=${BUILDROOT_RESUME:-0}
 
 log() {
     printf '[buildroot-matrix] %s\n' "$*"
@@ -73,13 +75,16 @@ for profile in "${profiles[@]}"; do
     [[ -f "$fragment" ]] || fail "profile fragment not found: $fragment"
 
     out_dir="$output_root/$profile"
-    log "configuring profile '$profile' (output: $out_dir)"
-    rm -rf "$out_dir"
-    mkdir -p "$out_dir"
+    if [[ "$resume_builds" == 1 && -f "$out_dir/.config" ]]; then
+        log "resuming profile '$profile' (output: $out_dir)"
+    else
+        log "configuring profile '$profile' (output: $out_dir)"
+        rm -rf "$out_dir"
+        mkdir -p "$out_dir"
 
-    make -C "$buildroot_dir" O="$out_dir" qemu_aarch64_virt_defconfig >/dev/null
+        make -C "$buildroot_dir" O="$out_dir" qemu_aarch64_virt_defconfig >/dev/null
 
-    cat >>"$out_dir/.config" <<EOF
+        cat >>"$out_dir/.config" <<EOF
 
 # daemon-util Buildroot matrix base options
 BR2_TARGET_GENERIC_GETTY_PORT="ttyAMA0"
@@ -95,8 +100,9 @@ BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$kernel_fragment"
 BR2_PACKAGE_HOST_QEMU=n
 EOF
 
-    cat "$fragment" >>"$out_dir/.config"
-    make -C "$buildroot_dir" O="$out_dir" olddefconfig >/dev/null
+        cat "$fragment" >>"$out_dir/.config"
+        make -C "$buildroot_dir" O="$out_dir" olddefconfig >/dev/null
+    fi
 
     log "building profile '$profile' with -j$jobs"
     make -C "$buildroot_dir" O="$out_dir" -j"$jobs"
@@ -110,6 +116,11 @@ EOF
 
     printf '%s\t%s\t%s\t%s\t%s\n' \
         "$profile" "$out_dir" "$kernel" "$rootfs_ext2" "${rootfs_cpio:-}" >>"$manifest"
+
+    if [[ "$keep_build_trees" != 1 ]]; then
+        log "removing regenerable build tree for profile '$profile'"
+        rm -rf "$out_dir/build" "$out_dir/host" "$out_dir/staging" "$out_dir/target"
+    fi
 done
 
 log "Buildroot matrix completed"

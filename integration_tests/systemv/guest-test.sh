@@ -18,6 +18,7 @@ lockfile="/var/lock/subsys/$registration_name"
 state_dir="/var/tmp/daemon-itest-$service_name"
 artifact_dir="$state_dir/artifacts"
 fixture_path="$install_dir/relative-path-test.txt"
+interpreted_test="$install_dir/interpreted-app-test.sh"
 current_scenario=initialization
 
 log() {
@@ -27,6 +28,30 @@ log() {
 fail() {
 	printf '[systemv-itest] ERROR: %s\n' "$*" >&2
 	return 1
+}
+
+. "$interpreted_test"
+
+interpreted_definition_path() {
+	printf '/etc/init.d/lz_lz_%s\n' "$1"
+}
+
+interpreted_removed() {
+	local auxiliary=$1 registration_name="lz_lz_$1"
+	local service_path="/etc/init.d/$registration_name"
+	local metadata_path="/var/lib/daemon-util/services/${registration_name}.json"
+	local pidfile="/var/run/${registration_name}.pid"
+	local identityfile="${pidfile}.identity"
+	local watcher_pidfile="/var/run/${registration_name}.watchdog.pid"
+	local link
+	[[ ! -e "$service_path" ]] || fail "auxiliary System V script remains: $registration_name"
+	[[ ! -e "$metadata_path" ]] || fail "auxiliary metadata remains: $auxiliary"
+	[[ ! -e "$pidfile" ]] || fail "auxiliary PID file remains: $registration_name"
+	[[ ! -e "$identityfile" ]] || fail "auxiliary identity file remains: $registration_name"
+	[[ ! -e "$watcher_pidfile" ]] || fail "auxiliary watchdog PID remains: $registration_name"
+	while IFS= read -r link; do
+		[[ ! -e "$link" && ! -L "$link" ]] || fail "auxiliary runlevel link remains: $link"
+	done < <(existing_runlevel_links)
 }
 
 assert_contains() {
@@ -282,6 +307,7 @@ require_environment() {
 	[[ $(id -u) -eq 0 ]] || fail "guest test must run as root"
 	[[ -x "$daemon_bin" ]] || fail "missing daemon binary at $daemon_bin"
 	[[ -x "$app_bin" ]] || fail "missing test application at $app_bin"
+	[[ -r "$interpreted_test" ]] || fail "missing interpreted application test at $interpreted_test"
 	[[ -f "$fixture_path" ]] || fail "missing relative-path fixture at $fixture_path"
 	[[ ! -d /run/systemd/system ]] || fail "systemd is active in the System V guest"
 	[[ "$(cat /proc/1/comm)" == init ]] || fail "System V init is not PID 1"
@@ -460,6 +486,10 @@ post_reboot() {
 	fi
 	assert_no_test_app_processes
 	"$daemon_bin" remove "$service_name"
+
+	current_scenario=interpreted-applications
+	log 'verifying symlinked native, shell, Python, and rejected direct-script applications'
+	verify_interpreted_applications
 
 	current_scenario=cleanup
 	collect_artifacts success

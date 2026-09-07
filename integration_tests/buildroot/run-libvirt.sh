@@ -128,7 +128,8 @@ copy_artifacts() {
 	[[ "$remote_ready" == 1 && -n "$ip_address" ]] || return
 	mkdir -p "$artifact_dir/guest"
 	ssh_guest 'cat /etc/os-release; cat /proc/1/comm; cat /etc/init.d/rcS; ps w' >"$artifact_dir/guest/environment.txt" 2>&1 || true
-	scp "${ssh_options[@]}" -r "root@$ip_address:/var/tmp/daemon-itest-$service_name/artifacts/." "$artifact_dir/guest/" >/dev/null 2>&1 || true
+	ssh_guest "tar -C '/var/tmp/daemon-itest-$service_name' -cf - artifacts" 2>/dev/null |
+		tar -C "$artifact_dir/guest" --strip-components=1 -xf - 2>/dev/null || true
 }
 cleanup() {
 	local status=$?
@@ -189,4 +190,5 @@ log 'rebooting Buildroot guest'
 ssh_guest reboot >/dev/null 2>&1 || true
 wait_for_new_boot "$boot_id"
 ssh_guest /opt/daemon-itest/guest-test.sh post-reboot "$service_name" "$port"
+printf 'PASS %s\n' "$profile" >"$artifact_dir/result.txt"
 log 'Buildroot VM integration test passed'

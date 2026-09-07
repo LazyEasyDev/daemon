@@ -118,6 +118,129 @@ function Assert-NoAppProcesses {
     Assert-True ($matches.Count -eq 0) "test application process leaked after cleanup"
 }
 
+function Wait-AuxiliaryPid([string]$Path, [int]$TimeoutSeconds = 60) {
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-Path $Path) {
+            $value = (Get-Content $Path -Raw).Trim()
+            if ($value -match '^\d+$' -and (Get-Process -Id ([int]$value) -ErrorAction SilentlyContinue)) {
+                return [int]$value
+            }
+        }
+        Start-Sleep -Seconds 1
+    }
+    throw "interpreted application did not write a live PID to $Path"
+}
+
+function Remove-AuxiliaryService([string]$LogicalName) {
+    $registered = "lz_lz_$LogicalName"
+    $metadata = Join-Path $env:ProgramData "daemon-util\services\$registered.json"
+    $service = Get-Service -Name $registered -ErrorAction SilentlyContinue
+    if ($null -ne $service) {
+        if ($service.Status -ne 'Stopped') {
+            & $Daemon stop $LogicalName | Out-Null
+        }
+        & $Daemon remove $LogicalName | Out-Null
+        $deadline = (Get-Date).AddSeconds(30)
+        while ((Get-Date) -lt $deadline -and (Get-Service -Name $registered -ErrorAction SilentlyContinue)) {
+            Start-Sleep -Seconds 1
+        }
+    }
+    Assert-True (-not (Get-Service -Name $registered -ErrorAction SilentlyContinue)) "auxiliary service remains: $registered"
+    Assert-True (-not (Test-Path $metadata)) "auxiliary metadata remains: $registered"
+}
+
+function Verify-AdditionalApplications {
+    Write-TestLog 'verifying symlinked native, PowerShell, optional Python, and rejected direct-script applications'
+    $linkName = "${ServiceName}symlinkapp"
+    $linkRegistration = "lz_lz_$linkName"
+    $appLink = Join-Path $InstallDir 'test-app-symlink.exe'
+    Remove-Item $appLink -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType SymbolicLink -Path $appLink -Target $App -Force | Out-Null
+    Invoke-Daemon @(
+        'install', '--ignore-warnings', $linkName, $appLink,
+        '--enabled=true', '--message', $ExpectedMessage, '--count', '7', '--port', "$Port",
+        '--file-path', 'relative-path-test.txt', '--event-path', (Join-Path $ArtifactDir 'symlink-application.events.jsonl')
+    )
+    $linkService = Get-CimInstance Win32_Service -Filter "Name='$linkRegistration'"
+    Assert-True ($linkService.PathName -match [regex]::Escape($App)) 'symlink service did not store the resolved PE path'
+    Invoke-Daemon @('start', $linkName)
+    $linkResponse = Wait-App
+    $linkPid = [int]$linkResponse.pid
+    Invoke-Daemon @('stop', $linkName)
+    Wait-AppProcessGone $linkPid
+    Remove-AuxiliaryService $linkName
+    Remove-Item $appLink -Force -ErrorAction SilentlyContinue
+
+    $powershellScript = Join-Path $InstallDir 'powershell-application.ps1'
+    $powershellState = Join-Path $ArtifactDir 'powershell-application'
+    @'
+param([string]$State)
+Set-Content -Path "$State.pid" -Value $PID
+Add-Content -Path "$State.events" -Value 'started'
+while ($true) { Start-Sleep -Seconds 1 }
+'@ | Set-Content -Path $powershellScript -Encoding UTF8
+
+    $rejectedName = "${ServiceName}directscript"
+    $savedErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $rejection = (& $Daemon install --ignore-warnings $rejectedName $powershellScript 2>&1 | Out-String)
+        $rejectionStatus = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $savedErrorActionPreference
+    }
+    $rejection | Out-File (Join-Path $ArtifactDir 'direct-script-rejection.txt')
+    Assert-True ($rejectionStatus -ne 0) 'direct PowerShell script was accepted as a native executable'
+    Remove-AuxiliaryService $rejectedName
+
+    $powershellName = "${ServiceName}powershellapp"
+    $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    Remove-Item "$powershellState.pid", "$powershellState.events" -Force -ErrorAction SilentlyContinue
+    Invoke-Daemon @('install', '--ignore-warnings', $powershellName, $powershellExe,
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $powershellScript, $powershellState)
+    Invoke-Daemon @('start', $powershellName)
+    $powershellPid = Wait-AuxiliaryPid "$powershellState.pid"
+    $powershellList = (& $Daemon list -l 2>&1 | Out-String)
+    Assert-True ($powershellList -match [regex]::Escape($powershellScript)) 'PowerShell application arguments are absent from list -l'
+    Invoke-Daemon @('stop', $powershellName)
+    Wait-AppProcessGone $powershellPid
+    Remove-AuxiliaryService $powershellName
+
+    $pythonCommand = Get-Command python.exe -ErrorAction SilentlyContinue
+    $pythonExe = $null
+    if ($null -ne $pythonCommand) {
+        $pythonReported = (& $pythonCommand.Source -c 'import sys; print(sys.executable)' 2>$null | Select-Object -Last 1)
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($pythonReported) -and (Test-Path $pythonReported)) {
+            $pythonExe = (Get-Item $pythonReported).FullName
+        }
+    }
+    if ($null -eq $pythonExe) {
+        'SKIP: python.exe is not installed in this guest' | Out-File (Join-Path $ArtifactDir 'python-application-skip.txt')
+    } else {
+        $pythonScript = Join-Path $InstallDir 'python-application.py'
+        $pythonState = Join-Path $ArtifactDir 'python-application'
+        @'
+import os, sys, time
+state = sys.argv[1]
+with open(state + '.pid', 'w', encoding='utf-8') as output:
+    output.write(str(os.getpid()))
+with open(state + '.events', 'a', encoding='utf-8') as output:
+    output.write('started\n')
+while True:
+    time.sleep(1)
+'@ | Set-Content -Path $pythonScript -Encoding UTF8
+        $pythonName = "${ServiceName}pythonapp"
+        Remove-Item "$pythonState.pid", "$pythonState.events" -Force -ErrorAction SilentlyContinue
+        Invoke-Daemon @('install', '--ignore-warnings', $pythonName, $pythonExe, $pythonScript, $pythonState)
+        Invoke-Daemon @('start', $pythonName)
+        $pythonPid = Wait-AuxiliaryPid "$pythonState.pid"
+        Invoke-Daemon @('stop', $pythonName)
+        Wait-AppProcessGone $pythonPid
+        Remove-AuxiliaryService $pythonName
+    }
+}
+
 function Remove-TestService {
     $service = Get-Service -Name $RegistrationName -ErrorAction SilentlyContinue
     if ($null -ne $service) {
@@ -348,11 +471,15 @@ switch ($Phase) {
         Invoke-Daemon @("remove", $ServiceName)
         Assert-True (-not (Get-Service -Name $RegistrationName -ErrorAction SilentlyContinue)) "service remains after forced-stop removal"
         Assert-True (-not (Test-Path $MetadataPath)) "metadata remains after forced-stop removal"
+        Verify-AdditionalApplications
         Save-Artifacts "success"
         Write-TestLog "all Windows application-level tests passed"
     }
     "cleanup" {
         Remove-TestService
+        foreach ($suffix in @('symlinkapp', 'directscript', 'powershellapp', 'pythonapp')) {
+            Remove-AuxiliaryService "${ServiceName}$suffix"
+        }
         Assert-NoAppProcesses
     }
 }

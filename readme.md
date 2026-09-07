@@ -16,10 +16,10 @@ Choose the binary in `build/` that matches the target system:
 
 | System | Architectures | Binary pattern |
 | --- | --- | --- |
-| Linux | AMD64, 386, ARM64, ARM32 | `daemon-linux-*` |
+| Linux | AMD64, ARM64, ARM32, MIPS, MIPSLE | `daemon-linux-*` |
 | macOS | Intel, Apple Silicon | `daemon-darwin-*` |
 | FreeBSD | AMD64, ARM64 | `daemon-freebsd-*` |
-| Windows | AMD64, 386, ARM64 | `daemon-windows-*.exe` |
+| Windows | AMD64, ARM64 | `daemon-windows-*.exe` |
 
 You can rename the selected binary to `daemon` or `daemon.exe`.
 
@@ -95,7 +95,9 @@ Show the application arguments recorded during installation:
 ./daemon ls -l
 ```
 
-The arguments are displayed as received by daemon-util, joined with spaces.
+For display, metadata stores the arguments as one space-joined string. The
+native service definition preserves the actual argument boundaries, but
+`list -l` does not reconstruct shell quoting or make empty arguments visible.
 
 Example output:
 
@@ -223,6 +225,37 @@ sudo ./daemon install myservice /bin/sh /opt/myservice/service.sh
 ```
 
 On macOS, use the same command without `sudo`.
+Passing a shell, Python, PowerShell, or other script directly as the application
+is intentionally rejected because the application path must identify a native
+ELF, Mach-O, or PE executable for the target operating system.
+
+daemon-util resolves interpreter symlinks before registration. On a minimal
+system where `/bin/sh` resolves to a BusyBox or Toybox multicall executable,
+pass the applet name explicitly:
+
+```sh
+sudo ./daemon install myservice /bin/busybox sh /opt/myservice/service.sh
+```
+
+Use `/bin/toybox sh` in the same way when Toybox provides the shell. Likewise,
+an argv0-dependent Python dispatcher is not a reliable installed target. On
+Linux, obtain the native executable used by the running Python interpreter and
+pass the script after it:
+
+```sh
+python_native=$(python3 -c 'import os; print(os.readlink("/proc/self/exe"))')
+sudo ./daemon install myservice "$python_native" /opt/myservice/service.py
+```
+
+On Windows, pass a PowerShell script to the native PowerShell executable:
+
+```powershell
+.\daemon.exe install myservice "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
+  -NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\MyService\service.ps1
+```
+
+In every case, the interpreter is the managed native executable and the script
+is an application argument.
 
 ## Platform behavior
 
@@ -242,18 +275,30 @@ manager, so small behavioral differences between platforms are expected.
 | --- | --- |
 | Windows | Sends `CTRL_BREAK_EVENT`, then terminates the Job Object after the timeout |
 | systemd | Stops processes remaining in the service control group |
-| OpenRC | Uses native `supervise-daemon` process-group and optional cgroup cleanup; escaped or outliving descendants are not guaranteed |
+| OpenRC | Requests native `supervise-daemon` cleanup with `stopgroup=true` and `rc_cgroup_cleanup=yes`; escaped or outliving descendants are not guaranteed |
 | System V | Validates and signals the recorded main PID; descendant cleanup is not guaranteed |
 | Buildroot | Uses `start-stop-daemon` for the validated main PID; descendant cleanup is not guaranteed |
 | runit | Starts a dedicated process group and signals it through runit control hooks |
 | macOS launchd | Uses launchd's default process-group cleanup |
-| Upstart, OpenWrt, FreeBSD | Relies on native service-manager or supervisor behavior |
+| Upstart | Uses Upstart's tracked job process and native stop timeout; arbitrary descendant cleanup is not guaranteed |
+| OpenWrt | Uses native procd instance supervision and `term_timeout`; daemon-util adds no separate process-tree walk |
+| FreeBSD | Stops the `/usr/sbin/daemon` supervisor and its recorded application PID; arbitrary descendant cleanup is not guaranteed |
 
-Backends without native containment, notably System V and Buildroot, guarantee
-termination only for the validated main process. Applications are responsible
-for stopping their own descendants. On other platforms, applications must not
-deliberately escape supervision by creating a separate session, process group,
-console, cgroup, or job.
+These guarantees depend on the selected service backend, not merely on kernel
+features. Kernel cgroup support, or even a mounted cgroup v1 or v2 filesystem,
+does not by itself place an application and its descendants in a dedicated
+service cgroup. daemon-util does not probe cgroup availability to upgrade a raw
+System V or Buildroot service into a cgroup-managed service.
+
+For systemd, the service manager owns the unit cgroup. For OpenRC, daemon-util
+requests OpenRC's native process-group and optional cgroup cleanup through the
+generated service settings. daemon-util does not directly create or manipulate
+raw Linux cgroups for either backend.
+System V and Buildroot guarantee termination only for the validated main
+process, and applications are responsible for stopping their own descendants.
+On other platforms, applications must not deliberately escape native
+supervision by creating a separate session, process group, console, cgroup, or
+job.
 
 ### Windows applications
 
@@ -269,7 +314,8 @@ actions.
 
 ### Service list metadata
 
-The `APP` column and the `ARGS` column shown by `list -l` are informational.
+The `APP` column shown by `list` and the additional `ARGS` column shown by
+`list -l` are informational.
 daemon-util stores the resolved application path and the application arguments
 in the platform's application-data directory, but this metadata does not
 control the service. Installation and listing still work if metadata cannot be
@@ -302,9 +348,8 @@ curl http://127.0.0.1:18080/healthz
 See [test_app/README.md](test_app/README.md) for argument, restart, and graceful
 shutdown test scenarios.
 
-Run the disposable QEMU/libvirt systemd, Rocky Linux, Raspberry Pi OS, Yocto,
-Alpine/OpenRC, Gentoo/OpenRC, Void/runit, Upstart, System V, Buildroot, OpenWrt,
-FreeBSD, and Windows application-level suites as documented in
+Run the disposable QEMU/libvirt server, embedded, vendor-image, FreeBSD, and
+Windows application-level suites documented in
 [integration_tests/README.md](integration_tests/README.md). They verify
 installation, boot persistence, restart behavior, stop-timeout escalation,
 process cleanup, and removal on real server and embedded operating systems.
@@ -328,17 +373,18 @@ daemon-util
   └── stores informational list metadata
        │
        ▼
-  Native service manager
+  Native service manager or per-service wrapper/watchdog
        │
        ▼
     Application process
 ```
 
 After registration, daemon-util exits. The native service manager owns boot
-startup, process monitoring, restart policy, status, and shutdown. Later
-`start`, `stop`, `restart`, `status`, and `remove` commands communicate with
-that service manager instead of controlling a long-running daemon-util
-process.
+startup, status, and shutdown. Restart monitoring is provided either directly
+by that manager or, for the raw System V and Buildroot backends, by a watchdog
+inside the generated per-service script. Later `start`, `stop`, `restart`,
+`status`, and `remove` commands communicate with that service definition rather
+than a shared long-running daemon-util process.
 
 Windows is the only platform that needs an additional runtime component. Each
 installed service starts its own daemon-util wrapper because ordinary console
@@ -362,13 +408,13 @@ Installation creates the native definition expected by the selected backend:
 
 | Backend | Registered definition |
 | --- | --- |
-| systemd | `/etc/systemd/system/<name>.service` |
-| OpenRC, OpenWrt, System V | `/etc/init.d/<name>` |
-| Upstart | `/etc/init/<name>.conf` |
-| runit | `/etc/sv/<name>/run`, enabled through `/var/service/<name>` |
-| Buildroot | `/etc/init.d/S90<name>` |
-| FreeBSD rc.d | `/usr/local/etc/rc.d/<name>` |
-| macOS launchd | `~/Library/LaunchAgents/<name>.plist` |
+| systemd | `/etc/systemd/system/<registration-name>.service` |
+| OpenRC, OpenWrt, System V | `/etc/init.d/<registration-name>` |
+| Upstart | `/etc/init/<registration-name>.conf` |
+| runit | `/etc/sv/<registration-name>/run`, enabled through `/var/service/<registration-name>` |
+| Buildroot | `/etc/init.d/S90<registration-name>` |
+| FreeBSD rc.d | `/usr/local/etc/rc.d/<registration-name>` |
+| macOS launchd | `~/Library/LaunchAgents/<registration-name>.plist` |
 | Windows SCM | Service Control Manager database entry |
 
 Internally, daemon-util prefixes registration names so `list` can distinguish
@@ -394,17 +440,12 @@ capabilities of the selected service manager.
 
 ### Configuration and metadata
 
-The native service definition is authoritative. It contains the resolved
-executable path, application arguments, working directory, restart behavior,
-and stop timeout supported by that backend.
+The native service definition is authoritative. Where supported by the
+backend, it contains the resolved executable path, application arguments,
+working directory, restart behavior, and stop timeout.
 
 daemon-util also keeps a small metadata file containing the application path
 shown by `list` and the stop timeout used for the terminal's approximate wait.
 Metadata writes are best-effort and deliberately non-authoritative: failure,
 deletion, or damage does not affect installation or service operation. Native
 service-manager tools can continue to manage the service without daemon-util.
-
-
-
-
-

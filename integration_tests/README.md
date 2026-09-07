@@ -4,18 +4,47 @@ These tests boot disposable virtual machines and exercise daemon-util through a
 real operating-system service manager. They complement `go test ./...`; they do
 not replace the package-level tests.
 
-Every live backend lane includes an executable hot-replacement scenario. Unix
-guests atomically rename a replacement over the running executable, verify that
-the original PID and service status remain stable, stop the old image, and
+Every verified backend lane includes an executable hot-replacement scenario.
+Unix guests atomically rename a replacement over the running executable, verify
+that the original PID and service status remain stable, stop the old image, and
 confirm the next start uses a new PID. Windows Server verifies the corresponding
 NTFS/SCM behavior with distinct binary hashes and a replacement-backed restart.
 
-The live Unix lanes also verify a native executable installed through a
+The verified Unix lanes also verify a native executable installed through a
 symlink, a shell script passed as an argument to a native shell interpreter,
 and rejection of a script passed directly as the executable. They run the same
 argument-hosted test through Python when Python is installed in the guest. The
 Windows lane performs the equivalent symlinked-PE, PowerShell-hosted,
 direct-script-rejection, and optional-Python checks.
+
+The shared Unix test preserves an explicit `sh` applet when `/bin/sh` resolves
+to BusyBox or Toybox, and uses the running Python process's native executable on
+Linux instead of an argv0-dependent Python dispatcher. This matches
+daemon-util's documented behavior of resolving executable symlinks before
+registration.
+
+Cleanup assertions follow the selected backend rather than kernel capability.
+In particular, a System V or Buildroot guest may expose cgroups, but those
+backends are tested only for validated-main-process termination because
+daemon-util does not create service cgroups for them.
+
+### Cleanup assertions by backend
+
+| Backend | What the integration tests assert |
+| --- | --- |
+| systemd | The main process and a spawned child are terminated as members of the unit control group |
+| OpenRC | The generated service sets `stopgroup=true` and `rc_cgroup_cleanup=yes`; tests require supervised-main-process cleanup, not arbitrary descendant cleanup |
+| runit | The main process and a spawned child are stopped through the dedicated process group |
+| Windows SCM | The application and spawned child are terminated through the per-service Job Object |
+| System V and Buildroot | Only the PID/start-time-validated main process is guaranteed to stop |
+| Upstart, OpenWrt, and FreeBSD | Native manager or supervisor stop behavior is tested; arbitrary descendant cleanup is not claimed |
+
+daemon-util does not infer service containment from `CONFIG_CGROUPS`, a
+`cgroup2` filesystem, or `/sys/fs/cgroup`. systemd owns its unit cgroups, while
+OpenRC may provide cgroup cleanup when its own cgroup support is active. The raw
+System V and Buildroot backends intentionally remain main-process-only even on
+a kernel with cgroup support. The public guarantee is summarized in the
+[process-cleanup table](../readme.md#process-cleanup).
 
 ## Current coverage
 
@@ -45,8 +74,9 @@ and covers reboot persistence, recovery, atomic replacement, timeout escalation,
 and cgroup cleanup without requiring physical RK3588 hardware.
 
 The DietPi lane applies the same two-boot test to the official Orange Pi 5
-DietPi ARMv8 image. The shared guest test intentionally needs neither Python nor
-an online package install, so it also runs on minimal vendor images.
+DietPi ARMv8 image. Python coverage is skipped when Python is absent, and the
+guest test requires no online package installation, so it also runs on minimal
+vendor images.
 
 The Radxa and Orange Pi vendor lanes run the official ROCK 5B Debian CLI and
 Orange Pi 5 Ubuntu Server userspaces, respectively. Their board-only kernels do
@@ -60,7 +90,12 @@ The Arch Linux ARM lane builds a writable filesystem from the official,
 GPG-verified generic AArch64 rootfs and boots its native kernel and initramfs.
 That generic rootfs is the Arch userspace supplied for PINE64 and Rockchip board
 installations. The Manjaro ARM lane similarly tests the official bootable
-minimal generic ARM64 image using a verified generic QEMU kernel.
+minimal generic ARM64 image using a checksum-verified generic QEMU kernel.
+
+The FriendlyCore lane runs the systemd lifecycle against the official NanoPi
+R5S ARM64 FriendlyCore image. Like the Radxa, Orange Pi, and Manjaro lanes, it
+preserves the vendor root filesystem while using a checksum-verified generic
+QEMU kernel; board firmware and peripherals remain outside this test scope.
 
 The Rocky Linux lane runs the systemd lifecycle on an official Rocky Linux 9
 GenericCloud image with SELinux Enforcing. It verifies the real risky-path
@@ -71,13 +106,14 @@ service-specific AVC denials.
 The Fedora lane runs the same SELinux-enforcing lifecycle against Fedora Cloud
 Base ARM64. The openSUSE Tumbleweed lane uses its official minimal ARM64 cloud
 image, verifies AppArmor kernel availability, and runs the complete systemd
-lifecycle on the image's XFS root filesystem.
+lifecycle. The pinned image uses XFS; the assertion also permits Btrfs.
 
-The OpenRC lane performs the same application-level lifecycle checks and also
-verifies its generated `openrc-run` script, `supervise-daemon` configuration,
+The OpenRC lane performs the same core application-level lifecycle checks and
+also verifies its generated `openrc-run` script, `supervise-daemon` configuration,
 default-runlevel registration, respawn behavior, native stop escalation, and
-atomic executable replacement. It does not promise cleanup of descendants that
-outlive or escape the supervised main process.
+atomic executable replacement. It requests native `stopgroup` and optional
+cgroup cleanup, but does not promise cleanup of descendants that outlive or
+escape the supervised main process.
 
 The Gentoo lane runs those OpenRC checks against an official ARM64 Gentoo
 OpenRC stage3. It uses serial-only direct QEMU boot, verifies the published
@@ -128,7 +164,10 @@ removal. System V does not promise cleanup of arbitrary descendants.
 The Buildroot lane builds baseline, debug, and release variants from source and
 boots them with a dedicated libvirt guest runner. It verifies watchdog recovery,
 reboot persistence, atomic executable replacement, direct and CLI restart,
-status, stop, and removal.
+status, stop, removal, native-executable symlink resolution,
+interpreter-hosted shell execution, optional Python, and direct-script
+rejection. Its cleanup contract covers the validated main process, not
+arbitrary descendants.
 
 The runit lane boots the official Void Linux ARM64 root filesystem with native
 runit as PID 1. It verifies backend precedence, service supervision, reboot
@@ -136,10 +175,44 @@ persistence, explicit restart, configured-failure and hard-crash recovery,
 atomic executable replacement, graceful and forced process-group cleanup, and
 removal.
 
-The tests use immutable Ubuntu, Rocky Linux, Raspberry Pi OS, Armbian, Poky,
-Alpine, Gentoo stage3, Void Linux rootfs, FreeBSD, OpenWrt, and FriendlyWrt
-artifacts with disposable overlays, copies, or generated filesystems. Cached
-source artifacts are never modified.
+The tests use cached upstream images, archives, generated Buildroot filesystems,
+and disposable overlays or copies. Cached source artifacts are not modified by
+normal test runs.
+
+## Runner index
+
+Run commands from the repository root. The generic System V constructors are
+retained for diagnostics but are not part of the verified matrix; the Yocto
+lane is the canonical System V regression.
+
+| Lane | Service backend | Command | Host requirement |
+| --- | --- | --- | --- |
+| Ubuntu | systemd | `./integration_tests/systemd/run-libvirt.sh` | x86-64 or ARM64 |
+| Rocky Linux | systemd | `./integration_tests/rocky/run-libvirt.sh` | x86-64 or ARM64 |
+| Fedora | systemd | `./integration_tests/fedora/run-libvirt.sh` | QEMU capable of ARM64 |
+| openSUSE | systemd | `./integration_tests/opensuse/run-libvirt.sh` | QEMU capable of ARM64 |
+| Raspberry Pi OS | systemd | `./integration_tests/raspios/run-qemu.sh` | QEMU with ARM and ARM64 system emulation |
+| Armbian | systemd | `./integration_tests/armbian/run-qemu.sh` | QEMU capable of ARM64 |
+| DietPi | systemd | `./integration_tests/dietpi/run-qemu.sh` | QEMU capable of ARM64 |
+| Radxa OS | systemd | `./integration_tests/radxa/run-qemu.sh` | QEMU capable of ARM64 |
+| Orange Pi Ubuntu | systemd | `./integration_tests/orangepi/run-qemu.sh` | QEMU capable of ARM64 |
+| FriendlyCore | systemd | `./integration_tests/friendlycore/run-qemu.sh` | QEMU capable of ARM64 |
+| Arch Linux ARM | systemd | `./integration_tests/archlinux/run-qemu.sh` | QEMU capable of ARM64 |
+| Manjaro ARM | systemd | `./integration_tests/manjaro/run-qemu.sh` | QEMU capable of ARM64 |
+| Alpine | OpenRC | `./integration_tests/openrc/run-libvirt.sh` | ARM64 host |
+| Gentoo | OpenRC | `./integration_tests/gentoo/run-qemu.sh` | QEMU capable of ARM64 |
+| Void Linux | runit | `./integration_tests/runit/run-qemu.sh` | QEMU capable of ARM64 |
+| Ubuntu 14.04 | Upstart | `./integration_tests/upstart/run-libvirt.sh` | ARM64 host |
+| Yocto/Poky | System V | `./integration_tests/yocto/run-qemu.sh` | QEMU capable of ARM64 |
+| Buildroot | Buildroot init | `./integration_tests/buildroot/run-libvirt.sh` | ARM64 host |
+| FreeBSD | rc.d | `./integration_tests/freebsd/run-libvirt.sh` | ARM64 host |
+| OpenWrt | procd | `./integration_tests/openwrt/run-libvirt.sh` | ARM64 host |
+| OpenWrt MIPS | procd | `./integration_tests/openwrt-mips/run-qemu.sh` | Debian/Ubuntu host with `apt-get` |
+| FriendlyWrt | procd | `./integration_tests/friendlywrt/run-qemu.sh` | ARM64 Debian/Ubuntu host |
+| ImmortalWrt | procd | `./integration_tests/immortalwrt/run-qemu.sh` | QEMU capable of ARM64 |
+| Windows Server | Windows SCM | `./integration_tests/windows/run-qemu.sh` | x86-64 QEMU; ARM64 uses TCG |
+| Experimental Devuan constructor | System V | `./integration_tests/systemv/run-libvirt.sh` | x86-64 or ARM64 |
+| Experimental Debian conversion | System V | `./integration_tests/systemv/run-libvirt-fallback.sh` | x86-64 or ARM64 |
 
 ## Ubuntu host prerequisites
 
@@ -150,7 +223,9 @@ sudo apt update
 sudo apt install libvirt-daemon-system libvirt-clients virtinst \
   cloud-image-utils qemu-utils qemu-system-x86 qemu-system-arm \
   qemu-efi-aarch64 genisoimage e2fsprogs util-linux wget openssh-client \
-  cpio fakeroot kmod mtools xz-utils
+  cpio fakeroot kmod mtools xz-utils python3 dpkg-dev iproute2 \
+  build-essential bc bison flex git libssl-dev libelf-dev openssl rsync \
+  file gnupg
 sudo usermod -aG libvirt,kvm "$USER"
 ```
 
@@ -162,6 +237,10 @@ with nested virtualized environments such as Parallels.
 
 The repository's required Go version must also be available on `PATH`. The
 module version is defined in [../go.mod](../go.mod).
+
+Some direct-QEMU lanes extract optional host tools from Ubuntu packages without
+root privileges. Their scripts check every required command before changing
+guest state and report any missing dependency.
 
 Verify access before running the test:
 
@@ -188,6 +267,15 @@ Go binaries, and creates a disposable guest.
 
 No application port is exposed to the host. HTTP assertions execute inside the
 guest against the test application's loopback listener.
+
+Systemd Ubuntu-specific settings are:
+
+| Environment variable | Default | Purpose |
+| --- | --- | --- |
+| `UBUNTU_RELEASE` | `24.04` | Ubuntu cloud-image release |
+| `BASE_IMAGE` | Cached release image | Existing qcow2 cloud image |
+| `BASE_IMAGE_URL` | Ubuntu release URL | Download source |
+| `BASE_IMAGE_SHA256` | Published checksum | Optional pinned image checksum |
 
 ## Run the Rocky Linux lane
 
@@ -234,6 +322,25 @@ The shared `VM_ARCH`, `VM_MEMORY_MIB`, `VM_VCPUS`, `VM_DISK_GIB`,
 `INTEGRATION_ARTIFACT_DIR`, and `KEEP_VM` settings also apply. The default boot
 timeout is 900 seconds because SELinux initialization and reboot are slower
 under QEMU TCG.
+
+## Run the Fedora and openSUSE lanes
+
+Both lanes reuse the Rocky/systemd runner with distribution-specific image and
+security assertions. Their defaults are pinned ARM64 images:
+
+```sh
+./integration_tests/fedora/run-libvirt.sh
+./integration_tests/opensuse/run-libvirt.sh
+```
+
+Fedora defaults to Cloud Base 44 and requires SELinux Enforcing. openSUSE
+defaults to the Tumbleweed minimal ARM64 snapshot dated 2026-08-30, requires
+the AppArmor kernel module, and accepts the image's Btrfs or XFS root
+filesystem. Both default to a 1,200-second boot timeout under emulation.
+
+Use `DISTRO_IMAGE_FILENAME`, `DISTRO_IMAGE_URL`,
+`DISTRO_IMAGE_SHA256`, and `VM_ARCH` together when substituting another image
+or architecture; overriding `VM_ARCH` alone does not select a matching image.
 
 ## Run the Raspberry Pi OS lane
 
@@ -316,6 +423,35 @@ Armbian-specific settings are:
 | `ARMBIAN_IMAGE_SHA256` | Published checksum | Optional pinned checksum override |
 | `ARMBIAN_ROOTFS_SIZE_MIB` | `3072` | Expanded disposable root filesystem size |
 
+## Run the additional systemd vendor lanes
+
+These runners reuse either the Armbian direct-QEMU harness or the shared
+systemd guest test:
+
+```sh
+./integration_tests/dietpi/run-qemu.sh
+./integration_tests/radxa/run-qemu.sh
+./integration_tests/orangepi/run-qemu.sh
+./integration_tests/friendlycore/run-qemu.sh
+./integration_tests/archlinux/run-qemu.sh
+./integration_tests/manjaro/run-qemu.sh
+```
+
+| Lane | Default source | Boot kernel |
+| --- | --- | --- |
+| DietPi | Orange Pi 5 ARMv8 Trixie image | Native image kernel |
+| Radxa OS | ROCK 5B Debian Bullseye CLI `b42` | Verified Poky 5.0.19 QEMU ARM64 kernel |
+| Orange Pi | Orange Pi 5 Ubuntu Jammy Server 1.2.4 | Verified Poky 5.0.19 QEMU ARM64 kernel |
+| FriendlyCore | NanoPi R5S Focal image dated 2026-07-21 | Verified Poky 5.0.19 QEMU ARM64 kernel |
+| Arch Linux ARM | Signed generic AArch64 rootfs | Kernel and initramfs from the rootfs |
+| Manjaro ARM | Minimal generic ARM64 23.02 image | Verified Poky 5.0.19 QEMU ARM64 kernel |
+
+The vendor-image lanes validate their userspace, init system, and service
+behavior on QEMU `virt`; they do not validate board boot firmware, device
+trees, storage controllers, networking hardware, or peripherals. Each wrapper
+accepts lane-prefixed image, checksum, rootfs-size, and boot-timeout overrides
+defined at the top of its `run-qemu.sh` file.
+
 ## Run the Yocto/Poky lane
 
 The Yocto lane targets the official Poky 5.0.19 Scarthgap LTS ARM64 minimal
@@ -359,6 +495,25 @@ The shared `VM_MEMORY_MIB`, `VM_VCPUS`, `VM_BOOT_TIMEOUT`, `TEST_APP_PORT`,
 `KEEP_VM` settings also apply. No libvirt network, cloud-init, SSH key, or UEFI
 firmware is required.
 
+## Experimental generic System V constructors
+
+The verified System V regression is the Yocto lane above. Two additional
+libvirt constructors are retained for diagnostics:
+
+```sh
+./integration_tests/systemv/run-libvirt.sh
+./integration_tests/systemv/run-libvirt-fallback.sh
+```
+
+The first performs a native Devuan Excalibur installation; the second attempts
+to convert a Debian 12 cloud image to SysVinit. These image-construction paths
+are not part of the passing matrix and may fail before daemon-util reaches its
+guest application tests. Such failures are constructor or image-compatibility
+failures, not evidence of a daemon-util runtime failure. When a guest does
+reach the tests, the backend validates and signals only the recorded main PID;
+it does not provide arbitrary descendant cleanup even if the kernel exposes
+cgroups.
+
 ## Run the OpenRC lane
 
 The OpenRC lane currently targets the official Alpine ARM64 UEFI cloud image:
@@ -366,6 +521,8 @@ The OpenRC lane currently targets the official Alpine ARM64 UEFI cloud image:
 ```sh
 ./integration_tests/openrc/run-libvirt.sh
 ```
+
+This libvirt runner currently requires an ARM64 host.
 
 The runner downloads Alpine 3.24.1, verifies the published SHA-512 checksum,
 installs Bash through cloud-init for the guest test driver, connects through the
@@ -386,6 +543,7 @@ OpenRC-specific image settings are:
 | `ALPINE_BASE_IMAGE_URL` | Official generic image | Download source |
 | `ALPINE_BASE_IMAGE_SHA512` | Published checksum | Optional pinned image checksum |
 | `VM_METADATA_HOST` | `192.168.122.1` | Host address on the libvirt bridge |
+| `VM_OS_VARIANT` | `alpinelinux3.21` | Closest available libosinfo identifier |
 
 The shared `VM_MEMORY_MIB`, `VM_VCPUS`, `VM_DISK_GIB`, `VM_BOOT_TIMEOUT`,
 `VM_VIRT_TYPE`, `VM_NETWORK`, `LIBVIRT_URI`, `ARM_UEFI_CODE`, `ARM_UEFI_VARS`,
@@ -473,6 +631,8 @@ The Upstart lane targets the official Ubuntu 14.04.5 LTS ARM64 UEFI cloud image:
 ./integration_tests/upstart/run-libvirt.sh
 ```
 
+This historical direct-boot runner currently requires an ARM64 host.
+
 Because modern AArch64 firmware may not boot this historical image reliably,
 the runner defaults to direct boot with the image's Ubuntu 4.4 kernel and
 initrd. It verifies the official image SHA-256 before creating a disposable
@@ -491,7 +651,7 @@ Upstart-specific settings are:
 | `UPSTART_KERNEL_IMAGE` | Cached extracted kernel | Existing direct-boot kernel |
 | `UPSTART_INITRD_IMAGE` | Cached extracted initrd | Existing direct-boot initrd |
 
-The shared VM, cache, artifact, and `KEEP_VM` settings listed above also apply.
+The shared VM, cache, artifact, and `KEEP_VM` settings also apply.
 
 ## Run the Windows Server lane
 
@@ -506,9 +666,10 @@ WINDOWS_SERVER_VERSION=2025 ./integration_tests/windows/run-qemu.sh
 The first run downloads the selected Microsoft ISO (4.9 GiB for Server 2019 or
 7.6 GiB for Server 2025), verifies its pinned SHA-256, and performs one
 unattended Server Core installation. Later runs use a disposable qcow2 overlay
-backed by the cached clean base disk. The test communicates with the guest
-through WinRM and forwards the application's HTTP endpoint to the host for
-external assertions.
+backed by the cached clean base disk and do not download or verify the installer
+ISO unless the base is missing or `WINDOWS_RESET_BASE=1`. The test communicates
+with the guest through WinRM and forwards the application's HTTP endpoint to
+the host for external assertions.
 
 The runner builds a second application binary with a distinct PE hash and uses
 same-volume `File.Replace` while the original process is running. It accepts and
@@ -556,6 +717,8 @@ The FreeBSD lane uses the official ARM64 BASIC-CLOUDINIT UFS image:
 ./integration_tests/freebsd/run-libvirt.sh
 ```
 
+This libvirt runner currently requires an ARM64 host.
+
 The default is FreeBSD 14.4-RELEASE. The compressed image is verified against
 the release SHA-256 manifest before it is decompressed and cached. No packages
 are installed in the guest; the test driver uses FreeBSD base-system tools. The
@@ -574,8 +737,9 @@ FreeBSD-specific image settings are:
 | `FREEBSD_COMPRESSED_IMAGE` | Cached official archive | Existing compressed image |
 | `FREEBSD_IMAGE_URL` | Official release URL | Compressed-image download source |
 | `FREEBSD_IMAGE_SHA256` | Release manifest value | Optional pinned archive checksum |
+| `VM_OS_VARIANT` | `freebsd14.2` | Closest available libosinfo identifier |
 
-The shared VM and artifact settings listed above also apply. The FreeBSD
+The shared VM and artifact settings also apply. The FreeBSD
 defaults are 2 GiB memory and an 8 GiB overlay.
 
 ## Run the OpenWrt lane
@@ -585,6 +749,8 @@ The OpenWrt lane uses the official ARM64 ext4 combined EFI image:
 ```sh
 ./integration_tests/openwrt/run-libvirt.sh
 ```
+
+This libvirt runner currently requires an ARM64 host.
 
 The default is OpenWrt 25.12.5. The runner verifies the published SHA-256,
 copies the raw image for each run, and injects an ephemeral Dropbear key and a
@@ -602,11 +768,29 @@ OpenWrt-specific image settings are:
 | `OPENWRT_COMPRESSED_IMAGE` | Cached official archive | Existing compressed image |
 | `OPENWRT_IMAGE_URL` | Official release URL | Compressed-image download source |
 | `OPENWRT_IMAGE_SHA256` | Published checksum | Optional pinned archive checksum |
+| `VM_OS_VARIANT` | `linux2024` | Generic Linux libosinfo identifier |
 
 The shared VM and artifact settings also apply. The OpenWrt default is 512 MiB
 of memory. OpenWrt mounts `/var` as volatile storage, so informational `APP` and
 `ARGS` list metadata is expected to disappear after reboot; the persistent
 procd service definition remains authoritative.
+
+## Run the additional procd lanes
+
+The MIPS lane tests both official Malta endian variants with soft-float Go
+binaries. The ImmortalWrt lane tests the official ARM64 EFI image:
+
+```sh
+./integration_tests/openwrt-mips/run-qemu.sh
+./integration_tests/immortalwrt/run-qemu.sh
+```
+
+`OPENWRT_MIPS_VERSION=25.12.0` and `OPENWRT_MIPS_VARIANTS=le,be` select the
+default MIPS images. The MIPS runner extracts QEMU's MIPS binaries from host
+packages into `/var/tmp` and therefore requires a Debian/Ubuntu host with
+`apt-get` and `dpkg-deb`. ImmortalWrt defaults to release 23.05.7 for target
+`armsr/armv8` and uses a separate 128 MiB state image to preserve two-boot test
+state.
 
 ## Run the NanoPi FriendlyWrt lane
 
@@ -635,30 +819,33 @@ FriendlyWrt-specific settings are:
 | `FRIENDLYWRT_QEMU_KERNEL` | Cached Poky qemuarm64 kernel | Generic test boot kernel |
 | `FRIENDLYWRT_STATE_SIZE_MIB` | `128` | Persistent test-state disk size |
 
-### Configuration
+## Common runner configuration
+
+Defaults vary by lane; the values below describe the general libvirt baseline.
+Direct-QEMU and vendor wrappers override them where their sections or scripts
+say otherwise.
 
 | Environment variable | Default | Purpose |
 | --- | --- | --- |
 | `VM_ARCH` | Host architecture | `amd64` or `arm64` guest |
-| `VM_MEMORY_MIB` | `2048` | Guest memory |
+| `VM_MEMORY_MIB` | Runner-specific | Guest memory |
 | `VM_VCPUS` | `2` | Guest virtual CPUs |
-| `VM_DISK_GIB` | `12` | Overlay disk capacity |
-| `VM_BOOT_TIMEOUT` | `600` | Boot, SSH, and reboot timeout in seconds |
+| `VM_DISK_GIB` | Runner-specific | Overlay disk capacity where applicable |
+| `VM_BOOT_TIMEOUT` | Runner-specific | Boot, SSH, and reboot timeout in seconds |
 | `VM_VIRT_TYPE` | Automatic | Force `kvm` or `qemu` |
+| `QEMU_ACCEL` | Automatic | Force `kvm` or `tcg` in direct-QEMU lanes |
 | `VM_NETWORK` | `default` | Existing libvirt NAT network |
 | `LIBVIRT_URI` | `qemu:///system` | Libvirt connection URI |
-| `UBUNTU_RELEASE` | `24.04` | Ubuntu cloud-image release |
-| `BASE_IMAGE` | Cached release image | Existing qcow2 cloud image |
-| `BASE_IMAGE_URL` | Ubuntu release URL | Download source |
-| `BASE_IMAGE_SHA256` | Published checksum | Optional pinned image checksum |
 | `ARM_UEFI_CODE` | AAVMF non-Secure-Boot code | ARM firmware code image |
 | `ARM_UEFI_VARS` | AAVMF variables template | ARM firmware variables image |
 | `INTEGRATION_CACHE_DIR` | `/var/tmp/daemon-util-integration-cache-<uid>` | Base-image cache |
 | `INTEGRATION_ARTIFACT_DIR` | `integration_tests/artifacts` | Diagnostic output |
+| `VM_WORK_DIR` | Timestamped path under `/var/tmp` | Temporary per-run workspace |
+| `TEST_APP_PORT` | `18080` | Guest loopback application port |
 | `KEEP_VM` | `0` | Keep the domain and temporary disks when set to `1` |
 
-For reproducible CI, provide a controlled `BASE_IMAGE` and pin its
-`BASE_IMAGE_SHA256`.
+For reproducible Ubuntu systemd CI, provide a controlled `BASE_IMAGE` and pin
+its `BASE_IMAGE_SHA256`.
 
 Examples:
 
@@ -674,8 +861,10 @@ KEEP_VM=1 ./integration_tests/systemd/run-libvirt.sh
 
 ## Failure artifacts
 
-Each run creates a timestamped artifact directory containing the libvirt domain
-XML and available guest diagnostics. Guest diagnostics include:
+Each run creates a timestamped artifact directory. Libvirt lanes retain domain
+XML and network diagnostics; direct-QEMU lanes retain serial logs, source and
+checksum records, and available guest diagnostics. Depending on the lane,
+guest diagnostics include:
 
 - generated systemd unit, OpenRC service script, FreeBSD rc.d script, or
   OpenWrt procd script;
@@ -687,13 +876,15 @@ XML and available guest diagnostics. Guest diagnostics include:
 - HTTP response snapshots; and
 - JSON Lines lifecycle records from the test application.
 
-The Yocto lane additionally retains the full serial log, durable guest result,
-guest test log, and an artifact archive extracted offline from the ext4 image.
+Offline-image lanes such as Yocto, Gentoo, runit, and several vendor runners
+also retain a durable guest result, guest test log, and artifacts extracted
+from the stopped filesystem.
 
-The VM is removed even when a test fails unless `KEEP_VM=1` is set.
+The libvirt domain or direct-QEMU process and disposable work files are removed
+even when a test fails unless `KEEP_VM=1` is set.
 
-During software-emulated boots, the runner prints DHCP, SSH, and reboot progress
-every 15 seconds. These waits are expected to take longer than they do with KVM.
+Most software-emulated runners print periodic boot, DHCP, SSH, or reboot
+progress. These waits are expected to take longer than they do with KVM.
 
 ## Build multiple Buildroot variants
 
@@ -708,6 +899,9 @@ Default profiles are `baseline,debug,release` using
 `qemu_aarch64_virt_defconfig` plus profile fragments in
 `integration_tests/buildroot/fragments`.
 
+The matrix can be built on a normal Linux development host, but the current
+libvirt runner for the generated ARM64 images requires an ARM64 host.
+
 Useful overrides:
 
 | Environment variable | Default | Purpose |
@@ -719,6 +913,10 @@ Useful overrides:
 | `JOBS` | Host CPU count | Parallel build jobs |
 | `BUILDROOT_KEEP_BUILD_TREES` | `0` | Set to `1` to retain large per-profile compiler and target trees |
 | `BUILDROOT_RESUME` | `0` | Set to `1` to resume profiles with an existing output configuration |
+| `BUILDROOT_PROFILE` | `baseline` | Profile selected by `run-libvirt.sh` |
+| `BUILDROOT_IMAGE_DIR` | `<output-root>/<profile>/images` | Directory containing generated boot images |
+| `BUILDROOT_KERNEL` | `<image-dir>/Image` | Kernel passed to libvirt |
+| `BUILDROOT_ROOTFS` | `<image-dir>/rootfs.ext2` | Root filesystem copied for the guest |
 
 Example building two profiles only:
 

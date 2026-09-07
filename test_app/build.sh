@@ -33,11 +33,9 @@ build_target darwin arm64
 build_target freebsd amd64
 build_target freebsd arm64
 build_target linux amd64
-build_target linux 386
 build_target linux arm64
 build_target linux arm arm32 "" 6
 build_target linux mips mips "" "" softfloat
 build_target linux mipsle mipsle "" "" softfloat
 build_target windows amd64 amd64 .exe
-build_target windows 386 386 .exe
 build_target windows arm64 arm64 .exe

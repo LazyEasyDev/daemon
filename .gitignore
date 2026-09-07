@@ -24,6 +24,9 @@ daemon
 # Repository-local build and dependency caches
 /.cache/
 
+# Background wget logs
+/wget-log*
+
 # Application-level integration test diagnostics
 /integration_tests/artifacts/
 

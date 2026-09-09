@@ -9,7 +9,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/LazyEasyDev/daemon/daemon_util"
+	"github.com/LazyEasyDev/Daemon/daemon_util"
 )
 
 type serviceMetadata struct {

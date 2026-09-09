@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LazyEasyDev/daemon/daemon_util"
+	"github.com/LazyEasyDev/Daemon/daemon_util"
 	"github.com/urfave/cli/v3"
 )
 

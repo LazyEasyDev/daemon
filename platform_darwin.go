@@ -5,7 +5,7 @@ package main
 import (
 	"os"
 
-	"github.com/LazyEasyDev/daemon/daemon_util"
+	"github.com/LazyEasyDev/Daemon/daemon_util"
 	"github.com/urfave/cli/v3"
 	"golang.org/x/sys/unix"
 )

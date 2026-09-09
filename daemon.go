@@ -15,7 +15,7 @@ import (
 
 	"github.com/urfave/cli/v3"
 
-	"github.com/LazyEasyDev/daemon/daemon_util"
+	"github.com/LazyEasyDev/Daemon/daemon_util"
 )
 
 func newService(serviceName, executablePath string) (daemon_util.Daemon, error) {

@@ -10,7 +10,7 @@ import (
 	"github.com/urfave/cli/v3"
 	"golang.org/x/sys/windows"
 
-	"github.com/LazyEasyDev/daemon/daemon_util"
+	"github.com/LazyEasyDev/Daemon/daemon_util"
 )
 
 const windowsServiceCommand = "run-windows-service"

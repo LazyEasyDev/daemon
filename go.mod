@@ -1,4 +1,4 @@
-module github.com/LazyEasyDev/daemon
+module github.com/LazyEasyDev/Daemon
 
 go 1.25.13
 
